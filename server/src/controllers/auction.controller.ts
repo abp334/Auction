@@ -2,11 +2,11 @@ import { StatusCodes } from "http-status-codes";
 import type { Request, Response } from "express";
 import Joi from "joi";
 import { nanoid } from "nanoid";
-import { Auction } from "../models/Auction";
-import { Player } from "../models/Player";
-import { Team } from "../models/Team";
-import { getIO } from "../sockets/io";
-import { User } from "../models/User";
+import { Auction } from "../models/Auction.js";
+import { Player } from "../models/Player.js";
+import { Team } from "../models/Team.js";
+import { getIO } from "../sockets/io.js";
+import { User } from "../models/User.js";
 
 const createSchema = Joi.object({
   name: Joi.string().min(2).required(),

@@ -1,22 +1,22 @@
-import 'dotenv/config';
-import express, { Application } from 'express';
-import http from 'http';
-import cors from 'cors';
-import helmet from 'helmet';
-import cookieParser from 'cookie-parser';
-import { Server as SocketIOServer } from 'socket.io';
-import { createCorsOptions } from './utils/cors';
-import { connectToDatabase } from './utils/mongo';
-import { registerAuctionSocketHandlers } from './sockets/auction';
-import { apiRouter } from './routes';
-import { setIO } from './sockets/io';
-import { errorHandler, notFound } from './middleware/error';
+import "dotenv/config";
+import express, { Application } from "express";
+import http from "http";
+import cors from "cors";
+import helmet from "helmet";
+import cookieParser from "cookie-parser";
+import { Server as SocketIOServer } from "socket.io";
+import { createCorsOptions } from "./utils/cors.js";
+import { connectToDatabase } from "./utils/mongo.js";
+import { registerAuctionSocketHandlers } from "./sockets/auction.js";
+import { apiRouter } from "./routes/index.js";
+import { setIO } from "./sockets/io.js";
+import { errorHandler, notFound } from "./middleware/error.js";
 
 const app: Application = express();
 const server = http.createServer(app);
 const io = new SocketIOServer(server, {
   cors: createCorsOptions(),
-  transports: ['websocket', 'polling'], // Support both for better compatibility
+  transports: ["websocket", "polling"], // Support both for better compatibility
   pingTimeout: 60000, // 60 seconds
   pingInterval: 25000, // 25 seconds
   maxHttpBufferSize: 1e6, // 1MB
@@ -28,23 +28,23 @@ setIO(io);
 // Middleware
 app.use(helmet());
 app.use(cors(createCorsOptions()));
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json({ limit: "1mb" }));
 app.use(cookieParser());
 
 // Health
-app.get('/health', (_req, res) => {
-  res.json({ ok: true, service: 'bidarena-server' });
+app.get("/health", (_req, res) => {
+  res.json({ ok: true, service: "bidarena-server" });
 });
 
 // API
-app.use('/api', apiRouter);
+app.use("/api", apiRouter);
 
 // Fallbacks
 app.use(notFound);
 app.use(errorHandler);
 
 // Socket handlers
-io.on('connection', (socket) => {
+io.on("connection", (socket) => {
   registerAuctionSocketHandlers(io, socket);
 });
 
@@ -60,8 +60,6 @@ async function start() {
 
 start().catch((err) => {
   // eslint-disable-next-line no-console
-  console.error('Fatal startup error', err);
+  console.error("Fatal startup error", err);
   process.exit(1);
 });
-
-
