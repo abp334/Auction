@@ -1,6 +1,7 @@
 import { StatusCodes } from "http-status-codes";
 import type { Request, Response } from "express";
 import Joi from "joi";
+import mongoose from "mongoose";
 import { nanoid } from "nanoid";
 import { Auction } from "../models/Auction.js";
 import { Player } from "../models/Player.js";
@@ -235,6 +236,9 @@ const bidSchema = Joi.object({
   playerId: Joi.string().optional(),
 });
 
+// Request deduplication map to prevent duplicate bids
+const pendingBids = new Map<string, Promise<any>>();
+
 export async function placeBid(req: Request, res: Response) {
   try {
     const { id } = req.params; // auction id
@@ -242,104 +246,144 @@ export async function placeBid(req: Request, res: Response) {
     if (error)
       return res.status(StatusCodes.BAD_REQUEST).json({ error: error.message });
 
-    // Optimize query - only fetch needed fields
-    const auction = await Auction.findById(id).select(
-      "state currentBid currentPlayerId roomCode skippedTeams teams bidHistory"
-    );
-    if (!auction)
-      return res
-        .status(StatusCodes.NOT_FOUND)
-        .json({ error: "Auction not found" });
-    if (auction.state !== "active")
-      return res
-        .status(StatusCodes.CONFLICT)
-        .json({ error: "Auction is not active" });
-
-    // Optimize queries - only fetch wallet for budget check
-    const team = await Team.findById(value.teamId).select("wallet name _id");
-    if (!team)
-      return res
-        .status(StatusCodes.BAD_REQUEST)
-        .json({ error: "Invalid team" });
-    if (value.playerId) {
-      const player = await Player.findById(value.playerId).select("_id");
-      if (!player)
-        return res
-          .status(StatusCodes.BAD_REQUEST)
-          .json({ error: "Invalid player" });
+    // Create deduplication key to prevent duplicate bids (per team per auction)
+    const dedupeKey = `bid:${id}:${value.teamId}`;
+    const existing = pendingBids.get(dedupeKey);
+    if (existing) {
+      // If a bid is already in progress for this team, return existing promise
+      return existing;
     }
-    // Enforce captains can only bid for their own team
-    const user = (req as any).user as
-      | { id: string; role: "admin" | "captain" | "player" }
-      | undefined;
-    if (user?.role === "captain") {
-      // Only fetch teamId field for captain check
-      const dbUser = await User.findById(user.id).select("teamId");
-      const captainTeamId = dbUser?.teamId;
-      // Use team.id (virtual property) or team._id.toString() for comparison
-      if (!captainTeamId || team.id !== captainTeamId) {
-        return res
-          .status(StatusCodes.FORBIDDEN)
-          .json({ error: "Captains can only bid for their team" });
+
+    const bidPromise = (async () => {
+      try {
+        // Use parallel queries for better performance
+        const [auction, team, user] = await Promise.all([
+          Auction.findById(id).select(
+            "state currentBid currentPlayerId roomCode skippedTeams teams bidHistory"
+          ),
+          Team.findById(value.teamId).select("wallet name _id"),
+          (req as any).user
+            ? User.findById((req as any).user.id).select("teamId")
+            : null,
+        ]);
+
+        if (!auction)
+          return res
+            .status(StatusCodes.NOT_FOUND)
+            .json({ error: "Auction not found" });
+        if (auction.state !== "active")
+          return res
+            .status(StatusCodes.CONFLICT)
+            .json({ error: "Auction is not active" });
+        if (!team)
+          return res
+            .status(StatusCodes.BAD_REQUEST)
+            .json({ error: "Invalid team" });
+
+        // Enforce captains can only bid for their own team
+        const currentUser = (req as any).user as
+          | { id: string; role: "admin" | "captain" | "player" }
+          | undefined;
+        if (currentUser?.role === "captain") {
+          const captainTeamId = user?.teamId;
+          if (!captainTeamId || team.id !== captainTeamId) {
+            return res
+              .status(StatusCodes.FORBIDDEN)
+              .json({ error: "Captains can only bid for their team" });
+          }
+        }
+
+        // Minimum bid and increment over current
+        const minBid = 1000;
+        if (value.amount < minBid)
+          return res
+            .status(StatusCodes.BAD_REQUEST)
+            .json({ error: `Minimum bid is ${minBid}` });
+
+        // Re-fetch auction to get latest currentBid (prevent race condition)
+        const latestAuction = await Auction.findById(id).select(
+          "currentBid currentPlayerId"
+        );
+        if (!latestAuction) {
+          return res
+            .status(StatusCodes.NOT_FOUND)
+            .json({ error: "Auction not found" });
+        }
+
+        if (
+          latestAuction.currentBid &&
+          value.amount <= latestAuction.currentBid.amount
+        ) {
+          return res
+            .status(StatusCodes.BAD_REQUEST)
+            .json({ error: "Bid must be higher than current highest bid" });
+        }
+
+        // Budget enforcement
+        if (team.wallet < value.amount)
+          return res
+            .status(StatusCodes.BAD_REQUEST)
+            .json({ error: "Insufficient team budget" });
+
+        // If enforcing player-based round, ensure bidding on the current player
+        if (
+          latestAuction.currentPlayerId &&
+          value.playerId &&
+          latestAuction.currentPlayerId !== value.playerId
+        ) {
+          return res
+            .status(StatusCodes.BAD_REQUEST)
+            .json({ error: "Not the current player being auctioned" });
+        }
+
+        const bid = {
+          teamId: value.teamId,
+          amount: value.amount,
+          playerId: value.playerId,
+          at: new Date(),
+        };
+
+        // Use atomic update to prevent race conditions
+        const updatedAuction = await Auction.findByIdAndUpdate(
+          id,
+          {
+            $set: { currentBid: bid, skippedTeams: [] },
+            $push: { bidHistory: bid },
+          },
+          { new: true }
+        );
+
+        if (!updatedAuction) {
+          return res
+            .status(StatusCodes.INTERNAL_SERVER_ERROR)
+            .json({ error: "Failed to update auction" });
+        }
+
+        // Reset timer when new bid comes in (non-blocking)
+        resetAuctionTimer(id, updatedAuction.roomCode).catch(console.error);
+
+        // Broadcast update (non-blocking)
+        try {
+          const io = getIO();
+          io.to(updatedAuction.roomCode).emit("auction:bid_update", {
+            amount: bid.amount,
+            teamId: bid.teamId,
+            playerId: bid.playerId,
+            at: bid.at.getTime(),
+          });
+        } catch {}
+
+        return res.status(StatusCodes.OK).json({ auction: updatedAuction });
+      } finally {
+        // Clear deduplication after 500ms
+        setTimeout(() => {
+          pendingBids.delete(dedupeKey);
+        }, 500);
       }
-    }
-    // Minimum bid and increment over current
-    const minBid = 1000;
-    if (value.amount < minBid)
-      return res
-        .status(StatusCodes.BAD_REQUEST)
-        .json({ error: `Minimum bid is ${minBid}` });
-    if (auction.currentBid && value.amount <= auction.currentBid.amount) {
-      return res
-        .status(StatusCodes.BAD_REQUEST)
-        .json({ error: "Bid must be higher than current highest bid" });
-    }
-    // Budget enforcement
-    if (team.wallet < value.amount)
-      return res
-        .status(StatusCodes.BAD_REQUEST)
-        .json({ error: "Insufficient team budget" });
-    // If enforcing player-based round, ensure bidding on the current player
-    if (
-      auction.currentPlayerId &&
-      value.playerId &&
-      auction.currentPlayerId !== value.playerId
-    ) {
-      return res
-        .status(StatusCodes.BAD_REQUEST)
-        .json({ error: "Not the current player being auctioned" });
-    }
+    })();
 
-    const bid = {
-      teamId: value.teamId,
-      amount: value.amount,
-      playerId: value.playerId,
-      at: new Date(),
-    };
-    auction.currentBid = bid;
-    // Ensure bidHistory is initialized
-    if (!auction.bidHistory) {
-      auction.bidHistory = [];
-    }
-    auction.bidHistory.push(bid);
-    // Clear skipped teams when new bid comes in
-    auction.skippedTeams = [];
-    await auction.save();
-
-    // Reset timer when new bid comes in
-    await resetAuctionTimer(id, auction.roomCode);
-
-    try {
-      const io = getIO();
-      io.to(auction.roomCode).emit("auction:bid_update", {
-        amount: bid.amount,
-        teamId: bid.teamId,
-        playerId: bid.playerId,
-        at: bid.at.getTime(),
-      });
-    } catch {}
-
-    return res.status(StatusCodes.OK).json({ auction });
+    pendingBids.set(dedupeKey, bidPromise);
+    return bidPromise;
   } catch (err: any) {
     console.error("Error in placeBid:", err);
     return res
@@ -587,31 +631,40 @@ export async function sellCurrent(req: Request, res: Response) {
       .status(StatusCodes.BAD_REQUEST)
       .json({ error: "Player not found" });
 
-  // Deduct and assign
+  // Check if player is already sold (prevent double-selling)
+  const alreadySold = auction.sales.some(
+    (sale: any) => sale.playerId === auction.currentPlayerId
+  );
+  if (alreadySold) {
+    return res
+      .status(StatusCodes.BAD_REQUEST)
+      .json({ error: "Player already sold" });
+  }
+
+  // Check if player is already assigned to a team
+  if (player.teamId && player.teamId !== "UNSOLD") {
+    return res
+      .status(StatusCodes.BAD_REQUEST)
+      .json({ error: "Player already assigned to a team" });
+  }
+
+  // Deduct and assign using atomic operation
   const salePrice = auction.currentBid.amount;
-  team.wallet = team.wallet - salePrice;
-  await team.save();
+
+  // Use atomic operation to deduct wallet (prevents race conditions)
+  const updatedTeam = await Team.findByIdAndUpdate(
+    team.id,
+    { $inc: { wallet: -salePrice } },
+    { new: true }
+  );
+  if (!updatedTeam || updatedTeam.wallet < 0) {
+    return res
+      .status(StatusCodes.BAD_REQUEST)
+      .json({ error: "Insufficient team budget" });
+  }
 
   player.teamId = team.id; // Use id property (Mongoose provides this)
   await player.save();
-
-  // Verify the save worked
-  const savedPlayer = await Player.findById(player.id);
-  const savedTeam = await Team.findById(team.id);
-
-  if (!savedPlayer || savedPlayer.teamId !== team.id) {
-    console.error("ERROR: Player assignment failed", {
-      playerId: player.id,
-      teamId: team.id,
-    });
-  }
-  if (!savedTeam || savedTeam.wallet !== team.wallet) {
-    console.error("ERROR: Team wallet deduction failed", {
-      teamId: team.id,
-      expected: team.wallet,
-      actual: savedTeam?.wallet,
-    });
-  }
 
   // Update auction with sale and clear current bid
   auction.sales.push({

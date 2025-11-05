@@ -10,7 +10,9 @@ export async function startAuctionTimer(auctionId: string, roomCode: string) {
   // Clear existing timer if any
   stopAuctionTimer(auctionId);
 
-  const auction = await Auction.findById(auctionId);
+  const auction = await Auction.findById(auctionId).select(
+    "state currentPlayerId timerDuration"
+  );
   if (!auction || auction.state !== "active" || !auction.currentPlayerId) {
     return;
   }
@@ -18,10 +20,11 @@ export async function startAuctionTimer(auctionId: string, roomCode: string) {
   const duration = auction.timerDuration || 30;
   const startTime = new Date();
 
-  // Update auction with timer start
-  auction.timerStart = startTime;
-  auction.skippedTeams = []; // Reset skipped teams for new player
-  await auction.save();
+  // Update auction with timer start (optimized - only update timer fields)
+  await Auction.findByIdAndUpdate(auctionId, {
+    timerStart: startTime,
+    $set: { skippedTeams: [] }, // Reset skipped teams for new player
+  });
 
   let timeLeft = duration;
   const io = getIO();
@@ -32,25 +35,33 @@ export async function startAuctionTimer(auctionId: string, roomCode: string) {
     totalTime: duration,
   });
 
+  // Use a more efficient timer that batches updates
+  let lastBroadcast = Date.now();
   const timer = setInterval(async () => {
     timeLeft--;
 
-    // Broadcast timer update every second
-    io.to(roomCode).emit("auction:timer", {
-      timeLeft,
-      totalTime: duration,
-    });
+    // Only broadcast every 500ms to reduce network overhead (or every second if less than 10)
+    const now = Date.now();
+    if (timeLeft <= 10 || now - lastBroadcast >= 500) {
+      io.to(roomCode).emit("auction:timer", {
+        timeLeft,
+        totalTime: duration,
+      });
+      lastBroadcast = now;
+    }
 
     if (timeLeft <= 0) {
       // Timer expired - handle automatically
       clearInterval(timer);
       activeTimers.delete(auctionId);
 
-      // Check if player should be sold or skipped
-      const updatedAuction = await Auction.findById(auctionId);
+      // Check if player should be sold or skipped (optimized query)
+      const updatedAuction = await Auction.findById(auctionId).select(
+        "state currentBid currentPlayerId skippedTeams teams"
+      );
       if (!updatedAuction || updatedAuction.state !== "active") return;
 
-      // Get all teams in auction - only fetch captainId and _id
+      // Get all teams in auction - only fetch captainId and _id (cached if possible)
       const teams = await Team.find({ _id: { $in: updatedAuction.teams } })
         .select("captainId _id")
         .lean();
@@ -73,13 +84,13 @@ export async function startAuctionTimer(auctionId: string, roomCode: string) {
 
       // If all skipped OR bidder skipped, mark as unsold (even if there was a bid)
       if (allSkipped || currentBidderSkipped) {
-        await markPlayerUnsold(auctionId, roomCode);
+        markPlayerUnsold(auctionId, roomCode).catch(console.error);
       } else if (hasBid) {
         // Sell to highest bidder only if bidder hasn't skipped
-        await sellCurrentPlayer(auctionId, roomCode);
+        sellCurrentPlayer(auctionId, roomCode).catch(console.error);
       } else {
         // No bid - mark as unsold and move to next
-        await markPlayerUnsold(auctionId, roomCode);
+        markPlayerUnsold(auctionId, roomCode).catch(console.error);
       }
     }
   }, 1000);
@@ -97,7 +108,15 @@ export function stopAuctionTimer(auctionId: string) {
 
 export async function resetAuctionTimer(auctionId: string, roomCode: string) {
   stopAuctionTimer(auctionId);
-  await startAuctionTimer(auctionId, roomCode);
+  // Use setTimeout to debounce rapid resets (prevents race conditions)
+  const existingReset = (resetAuctionTimer as any).pendingResets;
+  if (existingReset) {
+    clearTimeout(existingReset);
+  }
+  (resetAuctionTimer as any).pendingResets = setTimeout(() => {
+    startAuctionTimer(auctionId, roomCode).catch(console.error);
+    (resetAuctionTimer as any).pendingResets = null;
+  }, 100); // 100ms debounce
 }
 
 export async function sellCurrentPlayer(auctionId: string, roomCode: string) {
@@ -107,43 +126,88 @@ export async function sellCurrentPlayer(auctionId: string, roomCode: string) {
   );
   if (!auction || !auction.currentPlayerId || !auction.currentBid) return;
 
+  // Check if this player is already sold (prevent double-selling)
+  const alreadySold = auction.sales.some(
+    (sale: any) => sale.playerId === auction.currentPlayerId
+  );
+  if (alreadySold) {
+    console.log("Player already sold, skipping duplicate sale");
+    return;
+  }
+
   // Only fetch wallet and name for team
   const team = await Team.findById(auction.currentBid.teamId).select(
     "wallet name _id"
   );
   if (!team) return;
 
-  // Only fetch name for player
+  // Only fetch name and teamId for player (to check if already assigned)
   const player = await Player.findById(auction.currentPlayerId).select(
-    "name _id"
+    "name _id teamId"
   );
   if (!player) return;
 
-  // Deduct and assign
-  const salePrice = auction.currentBid.amount;
-  team.wallet = team.wallet - salePrice;
-  await team.save();
+  // Check if player is already assigned to a team (prevent double-selling)
+  if (player.teamId && player.teamId !== "UNSOLD") {
+    console.log("Player already assigned to team, skipping duplicate sale");
+    return;
+  }
 
+  // Verify team has enough budget (double-check before deducting)
+  const salePrice = auction.currentBid.amount;
+  if (team.wallet < salePrice) {
+    console.error("Insufficient wallet when trying to sell", {
+      teamId: team.id,
+      wallet: team.wallet,
+      salePrice,
+    });
+    return;
+  }
+
+  // Use atomic operation to deduct wallet (prevents race conditions)
+  const updatedTeam = await Team.findByIdAndUpdate(
+    auction.currentBid.teamId,
+    { $inc: { wallet: -salePrice } },
+    { new: true }
+  );
+  if (!updatedTeam) {
+    console.error("Failed to update team wallet");
+    return;
+  }
+
+  // Assign player to team
   player.teamId = (team as any)._id.toString();
   await player.save();
 
-  // Update auction
-  auction.sales.push({
-    playerId: (player as any)._id.toString(),
-    teamId: (team as any)._id.toString(),
-    price: salePrice,
-    at: new Date(),
-  });
-  auction.currentBid = undefined;
-  auction.skippedTeams = [];
-  await auction.save();
+  // Update auction - check again if already sold (race condition protection)
+  const updatedAuction = await Auction.findById(auctionId);
+  if (!updatedAuction) return;
+
+  const stillUnsold = !updatedAuction.sales.some(
+    (sale: any) => sale.playerId === auction.currentPlayerId
+  );
+
+  if (stillUnsold) {
+    updatedAuction.sales.push({
+      playerId: (player as any)._id.toString(),
+      teamId: (team as any)._id.toString(),
+      price: salePrice,
+      at: new Date(),
+    });
+    updatedAuction.currentBid = undefined;
+    updatedAuction.skippedTeams = [];
+    await updatedAuction.save();
+  } else {
+    console.log("Player already sold in auction sales, skipping duplicate");
+    return;
+  }
 
   const io = getIO();
   io.to(roomCode).emit("auction:sale", {
     playerId: (player as any)._id.toString(),
     playerName: player.name,
-    teamId: (team as any)._id.toString(),
-    teamName: team.name,
+    teamId: (updatedTeam as any)._id.toString(),
+    teamName: updatedTeam.name,
     price: salePrice,
   });
 

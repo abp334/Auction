@@ -19,8 +19,14 @@ const io = new SocketIOServer(server, {
   transports: ["websocket", "polling"], // Support both for better compatibility
   pingTimeout: 60000, // 60 seconds
   pingInterval: 25000, // 25 seconds
-  maxHttpBufferSize: 1e6, // 1MB
+  maxHttpBufferSize: 1e6, // 1MB limit
   allowEIO3: true, // Backward compatibility
+  connectTimeout: 45000, // 45 seconds
+  upgradeTimeout: 10000, // 10 seconds
+  // Enable compression for better performance
+  perMessageDeflate: {
+    threshold: 1024, // Only compress messages larger than 1KB
+  },
 });
 
 setIO(io);

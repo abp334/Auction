@@ -58,6 +58,8 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
   const teamsRef = useRef<Team[]>([]);
   // Use ref to prevent multiple timer triggers
   const timerTriggeredRef = useRef<boolean>(false);
+  // Debounce bid requests to prevent rapid duplicates
+  const bidTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     // Load auction by roomCode and bootstrap teams, current player
@@ -368,8 +370,18 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
       return;
     }
 
-    if (isBidding) return; // Prevent multiple simultaneous bids
+    // Prevent multiple simultaneous bids
+    if (isBidding) return;
+
+    // Debounce rapid clicks (prevent duplicate bids)
+    if (bidTimeoutRef.current) {
+      return; // Already processing a bid
+    }
+
     setIsBidding(true);
+    bidTimeoutRef.current = setTimeout(() => {
+      bidTimeoutRef.current = null;
+    }, 1000); // 1 second debounce
 
     const newBid = Math.max(1000, (currentPlayer.currentBid || 1000) + 1000);
 
@@ -450,6 +462,10 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
       });
     } finally {
       setIsBidding(false);
+      if (bidTimeoutRef.current) {
+        clearTimeout(bidTimeoutRef.current);
+        bidTimeoutRef.current = null;
+      }
     }
   };
 
