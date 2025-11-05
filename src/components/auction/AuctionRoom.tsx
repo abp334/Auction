@@ -51,6 +51,9 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
   const [auctionId, setAuctionId] = useState<string | null>(null);
   const [auction, setAuction] = useState<any>(null);
   const [socket, setSocket] = useState<Socket | null>(null);
+  const [isBidding, setIsBidding] = useState(false);
+  const [isSkipping, setIsSkipping] = useState(false);
+  const [isUndoing, setIsUndoing] = useState(false);
   // Use ref to keep teams accessible in socket handlers
   const teamsRef = useRef<Team[]>([]);
   // Use ref to prevent multiple timer triggers
@@ -161,9 +164,38 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
           ? { ...prev, currentBid: { amount: e.amount, teamId: e.teamId } }
           : null
       );
-      // Reset timer on new bid
-      setTimeLeft(30);
+      // Update last bid team
+      setLastBidTeam(e.teamId);
+      // Timer will be reset by server
     });
+    s.on(
+      "auction:bid_undo",
+      (e: {
+        teamId: string;
+        teamName: string;
+        currentBid?: { amount: number; teamId: string };
+      }) => {
+        setCommentary((prev) =>
+          [`${e.teamName} withdrew their bid.`, ...prev].slice(0, 10)
+        );
+        if (e.currentBid) {
+          setCurrentPlayer((p) =>
+            p ? { ...p, currentBid: e.currentBid!.amount } : null
+          );
+          setAuction((prev: any) =>
+            prev ? { ...prev, currentBid: e.currentBid } : null
+          );
+          setLastBidTeam(e.currentBid.teamId);
+        } else {
+          // No more bids - reset to base price (1000)
+          setCurrentPlayer((p) => (p ? { ...p, currentBid: 1000 } : null));
+          setAuction((prev: any) =>
+            prev ? { ...prev, currentBid: undefined } : null
+          );
+          setLastBidTeam(null);
+        }
+      }
+    );
     s.on("auction:sale", async (e: any) => {
       // First, refresh teams to get latest data
       const tRes = await apiFetch("/teams");
@@ -242,12 +274,25 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
         batsmanType: e.player.role || "",
         bowlerType: e.player.bowlerType || "Not a Bowler",
       });
-      setTimeLeft(30); // Reset timer to 30 seconds
+      setTimeLeft(30); // Will be updated by server timer broadcast
       setHasSkipped(false); // Reset skip state for new player
-      timerTriggeredRef.current = false; // Reset trigger flag for new player
       // Clear auction currentBid when new player is set
       setAuction((prev: any) =>
         prev ? { ...prev, currentBid: undefined } : null
+      );
+    });
+    s.on("auction:skip", (e: { teamId: string; teamName: string }) => {
+      setCommentary((prev) =>
+        [`${e.teamName} skipped this player.`, ...prev].slice(0, 10)
+      );
+      // If it's my team, mark as skipped
+      if (e.teamId === myTeamId || e.teamId === user?.teamId) {
+        setHasSkipped(true);
+      }
+    });
+    s.on("auction:unsold", (e: { playerId: string; playerName: string }) => {
+      setCommentary((prev) =>
+        [`${e.playerName} went unsold.`, ...prev].slice(0, 10)
       );
     });
     s.on("auction:completed", (e: any) => {
@@ -264,6 +309,24 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
         description: "All players have been sold!",
       });
     });
+    s.on("auction:ended", (e: { message: string; auctionId: string }) => {
+      setCommentary((prev) =>
+        [e.message || "Auction ended by admin", ...prev].slice(0, 10)
+      );
+      setCurrentPlayer(null);
+      setAuction((prev: any) =>
+        prev ? { ...prev, state: "completed" } : null
+      );
+      toast({
+        title: "Auction Ended",
+        description: "The auction has been ended by admin. Redirecting...",
+        variant: "destructive",
+      });
+      // Redirect to joining page after 2 seconds
+      setTimeout(() => {
+        onExit();
+      }, 2000);
+    });
     setSocket(s);
 
     return () => {
@@ -278,63 +341,20 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
     teamsRef.current = teams;
   }, [teams]);
 
+  // Listen to server timer broadcasts instead of running local timer
   useEffect(() => {
-    if (!auctionId || !currentPlayer || auction?.state !== "active") return;
+    if (!socket) return;
 
-    // Reset trigger flag when player changes
-    timerTriggeredRef.current = false;
+    const handleTimer = (e: { timeLeft: number; totalTime: number }) => {
+      setTimeLeft(e.timeLeft);
+    };
 
-    const timerInterval = setInterval(() => {
-      setTimeLeft((prev) => {
-        if (prev <= 1 && !timerTriggeredRef.current) {
-          timerTriggeredRef.current = true; // Prevent multiple calls
-
-          // Timer expired - automatically sell to highest bidder
-          // Check both currentPlayer.currentBid and auction.currentBid
-          const hasBid =
-            (currentPlayer.currentBid && currentPlayer.currentBid >= 1000) ||
-            (auction?.currentBid && auction.currentBid.amount >= 1000);
-
-          if (auctionId && currentPlayer && hasBid) {
-            apiFetch(`/auctions/${auctionId}/sell-current`, {
-              method: "POST",
-            })
-              .then(() => {
-                // Sale successful - timer will reset when new player is set via socket
-              })
-              .catch((err) => {
-                console.error("Failed to auto-sell player:", err);
-                timerTriggeredRef.current = false; // Reset on error so it can retry
-              });
-          } else {
-            // No bid - move to next player anyway
-            if (auctionId) {
-              apiFetch(`/auctions/${auctionId}/sell-current`, {
-                method: "POST",
-              }).catch((err) => {
-                console.error("Failed to move to next player:", err);
-                timerTriggeredRef.current = false; // Reset on error
-              });
-            }
-          }
-          // Keep at 0 until socket event resets it
-          return 0;
-        }
-        if (prev <= 0) return 0; // Stay at 0 if already triggered
-        return prev - 1;
-      });
-    }, 1000);
+    socket.on("auction:timer", handleTimer);
 
     return () => {
-      clearInterval(timerInterval);
+      socket.off("auction:timer", handleTimer);
     };
-  }, [
-    auctionId,
-    currentPlayer?.id,
-    currentPlayer?.currentBid,
-    auction?.state,
-    auction?.currentBid,
-  ]);
+  }, [socket]);
 
   const handleBid = async () => {
     // Use user.teamId as fallback if myTeamId is not set
@@ -347,62 +367,212 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
       });
       return;
     }
+
+    if (isBidding) return; // Prevent multiple simultaneous bids
+    setIsBidding(true);
+
     const newBid = Math.max(1000, (currentPlayer.currentBid || 1000) + 1000);
-    const res = await apiFetch(`/auctions/${auctionId}/bid`, {
-      method: "POST",
-      body: JSON.stringify({
-        amount: newBid,
-        teamId: teamId,
-        playerId: currentPlayer.id,
-      }),
-    });
-    if (!res.ok) {
-      const { error } = await res.json().catch(() => ({ error: "Bid failed" }));
+
+    // Optimistic UI update - update immediately before server confirms
+    const optimisticBid = newBid;
+    const optimisticTeamId = teamId;
+    setCurrentPlayer((p) => (p ? { ...p, currentBid: optimisticBid } : null));
+    setAuction((prev: any) =>
+      prev
+        ? {
+            ...prev,
+            currentBid: { amount: optimisticBid, teamId: optimisticTeamId },
+          }
+        : null
+    );
+    setLastBidTeam(optimisticTeamId);
+
+    // Update commentary optimistically
+    const teamName =
+      teamsRef.current.find((t) => t.id === optimisticTeamId)?.name ||
+      "Your team";
+    setCommentary((prev) =>
+      [`Bid: $${optimisticBid.toLocaleString()} by ${teamName}`, ...prev].slice(
+        0,
+        10
+      )
+    );
+
+    try {
+      const res = await apiFetch(`/auctions/${auctionId}/bid`, {
+        method: "POST",
+        body: JSON.stringify({
+          amount: newBid,
+          teamId: teamId,
+          playerId: currentPlayer.id,
+        }),
+      });
+      if (!res.ok) {
+        // Revert optimistic update on error
+        const { error } = await res
+          .json()
+          .catch(() => ({ error: "Bid failed" }));
+
+        // Revert to previous bid
+        const previousBid =
+          auction?.currentBid?.amount ||
+          currentPlayer.currentBid - 1000 ||
+          1000;
+        setCurrentPlayer((p) => (p ? { ...p, currentBid: previousBid } : null));
+        setAuction((prev: any) =>
+          prev ? { ...prev, currentBid: auction?.currentBid } : null
+        );
+
+        toast({
+          title: "Bid failed",
+          description: error,
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Bid Placed",
+          description: `$${newBid.toLocaleString()}`,
+        });
+      }
+    } catch (err) {
+      // Revert optimistic update on error
+      const previousBid =
+        auction?.currentBid?.amount || currentPlayer.currentBid - 1000 || 1000;
+      setCurrentPlayer((p) => (p ? { ...p, currentBid: previousBid } : null));
+      setAuction((prev: any) =>
+        prev ? { ...prev, currentBid: auction?.currentBid } : null
+      );
+
       toast({
         title: "Bid failed",
-        description: error,
+        description: "Network error. Please try again.",
         variant: "destructive",
       });
-      return;
+    } finally {
+      setIsBidding(false);
     }
-    setTimeLeft(30);
-    toast({ title: "Bid Placed", description: `$${newBid.toLocaleString()}` });
   };
 
-  const handleSkip = () => {
-    // Get actual team name from teams list
+  const handleSkip = async () => {
+    if (!auctionId) return;
+    if (isSkipping) return; // Prevent multiple simultaneous skips
+    setIsSkipping(true);
+
+    // Optimistic UI update
+    setHasSkipped(true);
     const teamName =
       teamsRef.current.find((t) => t.id === myTeamId || t.id === user?.teamId)
         ?.name || "Your team";
-    setHasSkipped(true);
-    setCommentary((prev) => [
-      `${teamName} skipped this player.`,
-      ...prev.slice(0, 4),
-    ]);
-    toast({
-      title: "Player Skipped",
-      description: "You've opted out of this player",
-    });
+    setCommentary((prev) =>
+      [`${teamName} skipped this player.`, ...prev].slice(0, 10)
+    );
+
+    try {
+      const res = await apiFetch(`/auctions/${auctionId}/skip`, {
+        method: "POST",
+      });
+      if (res.ok) {
+        toast({
+          title: "Player Skipped",
+          description: "You've opted out of this player",
+        });
+      } else {
+        // Revert optimistic update on error
+        setHasSkipped(false);
+        const data = await res.json();
+        toast({
+          title: "Error",
+          description: data.error || "Failed to skip player",
+          variant: "destructive",
+        });
+      }
+    } catch (err) {
+      // Revert optimistic update on error
+      setHasSkipped(false);
+      console.error("Failed to skip player:", err);
+      toast({
+        title: "Error",
+        description: "Failed to skip player",
+        variant: "destructive",
+      });
+    } finally {
+      setIsSkipping(false);
+    }
   };
 
-  const handleUndo = () => {
-    if (lastBidTeam === localStorage.getItem("userTeam")) {
-      const newBid = Math.max(5000, currentPlayer.currentBid - 1000);
-      setCurrentPlayer({ ...currentPlayer, currentBid: newBid });
-      setCommentary((prev) => [
-        `${localStorage.getItem("userTeam")} withdrew their bid.`,
-        ...prev.slice(0, 4),
-      ]);
-      toast({
-        title: "Bid Undone",
-        description: "Your last bid was withdrawn",
-      });
-    } else {
+  const handleUndo = async () => {
+    if (!auctionId) return;
+    if (isUndoing) return; // Prevent multiple simultaneous undos
+    setIsUndoing(true);
+
+    // Check if last bid is from my team
+    const teamId = myTeamId || user?.teamId;
+    if (!teamId || lastBidTeam !== teamId) {
       toast({
         title: "Cannot Undo",
         description: "You can only undo your own bids",
         variant: "destructive",
       });
+      setIsUndoing(false);
+      return;
+    }
+
+    // Optimistic UI update - revert to previous bid
+    const previousBid = Math.max(
+      1000,
+      (currentPlayer?.currentBid || 1000) - 1000
+    );
+    const previousBidState = auction?.currentBid;
+    setCurrentPlayer((p) => (p ? { ...p, currentBid: previousBid } : null));
+    setAuction((prev: any) =>
+      prev ? { ...prev, currentBid: previousBidState } : null
+    );
+    setLastBidTeam(null);
+
+    try {
+      const res = await apiFetch(`/auctions/${auctionId}/undo-bid`, {
+        method: "POST",
+      });
+      if (res.ok) {
+        toast({
+          title: "Bid Undone",
+          description: "Your last bid was withdrawn",
+        });
+      } else {
+        // Revert optimistic update on error
+        setCurrentPlayer((p) =>
+          p ? { ...p, currentBid: currentPlayer?.currentBid || 1000 } : null
+        );
+        setAuction((prev: any) =>
+          prev ? { ...prev, currentBid: auction?.currentBid } : null
+        );
+        setLastBidTeam(teamId);
+
+        const data = await res.json();
+        toast({
+          title: "Error",
+          description: data.error || "Failed to undo bid",
+          variant: "destructive",
+        });
+      }
+    } catch (err) {
+      // Revert optimistic update on error
+      setCurrentPlayer((p) =>
+        p ? { ...p, currentBid: currentPlayer?.currentBid || 1000 } : null
+      );
+      setAuction((prev: any) =>
+        prev ? { ...prev, currentBid: auction?.currentBid } : null
+      );
+      setLastBidTeam(teamId);
+
+      console.error("Failed to undo bid:", err);
+      toast({
+        title: "Error",
+        description: "Failed to undo bid",
+        variant: "destructive",
+      });
+    } finally {
+      setIsUndoing(false);
     }
   };
 
@@ -524,13 +694,14 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
                       </>
                     ) : (
                       <>
-                        <Clock className="w-24 h-24 mx-auto text-amber-400 opacity-75" />
+                        <Clock className="w-24 h-24 mx-auto text-amber-400 opacity-75 animate-pulse" />
                         <div>
                           <h2 className="text-3xl font-bold mb-2 text-white">
-                            Waiting for Player
+                            Selecting Next Player...
                           </h2>
                           <p className="text-white/70 text-lg">
-                            Admin will select the next player to auction...
+                            The system is automatically selecting the next
+                            player...
                           </p>
                         </div>
                       </>
@@ -605,25 +776,32 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
                           <Button
                             size="lg"
                             onClick={handleBid}
-                            className="bg-green-600 hover:bg-green-700 text-white text-lg h-14 font-bold"
+                            disabled={isBidding}
+                            className="bg-green-600 hover:bg-green-700 text-white text-lg h-14 font-bold disabled:opacity-50 disabled:cursor-not-allowed"
                           >
                             <Gavel className="w-5 h-5 mr-2" />
-                            Bid
+                            {isBidding ? "Placing..." : "Bid"}
                           </Button>
                           <Button
                             size="lg"
                             onClick={handleSkip}
-                            className="bg-amber-600 hover:bg-amber-700 text-white h-14 font-bold border-2 border-amber-500"
+                            disabled={isSkipping}
+                            className="bg-amber-600 hover:bg-amber-700 text-white h-14 font-bold border-2 border-amber-500 disabled:opacity-50 disabled:cursor-not-allowed"
                           >
-                            Skip
+                            {isSkipping ? "Skipping..." : "Skip"}
                           </Button>
                           <Button
                             size="lg"
                             variant="destructive"
                             onClick={handleUndo}
-                            className="h-14 font-bold"
+                            disabled={
+                              isUndoing ||
+                              !lastBidTeam ||
+                              lastBidTeam !== (myTeamId || user?.teamId)
+                            }
+                            className="h-14 font-bold disabled:opacity-50 disabled:cursor-not-allowed"
                           >
-                            Undo
+                            {isUndoing ? "Undoing..." : "Undo"}
                           </Button>
                         </div>
                       )}

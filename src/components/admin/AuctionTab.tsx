@@ -23,6 +23,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { apiFetch } from "@/lib/api";
 
 const AuctionTab = () => {
@@ -37,6 +47,7 @@ const AuctionTab = () => {
   const [bidIncrement, setBidIncrement] = useState("1000");
   const [timerDuration, setTimerDuration] = useState("30");
   const [loading, setLoading] = useState(false);
+  const [showEndConfirm, setShowEndConfirm] = useState(false);
 
   const loadPlayers = useCallback(async () => {
     const pRes = await apiFetch("/players");
@@ -206,6 +217,7 @@ const AuctionTab = () => {
 
   const closeAuction = async () => {
     if (!currentAuction) return;
+    setShowEndConfirm(false);
     setLoading(true);
     const res = await apiFetch(`/auctions/${currentAuction._id}/close`, {
       method: "POST",
@@ -214,7 +226,11 @@ const AuctionTab = () => {
       const { auction } = await res.json();
       setCurrentAuction(null);
       setRoomCode("");
-      toast({ title: "Auction Closed", description: "Auction has been ended" });
+      toast({
+        title: "Auction Closed",
+        description:
+          "Auction has been ended. All participants have been notified.",
+      });
     } else {
       toast({ title: "Error", description: "Failed to close auction" });
     }
@@ -399,10 +415,35 @@ const AuctionTab = () => {
                 disabled={
                   auctionStatus === "idle" || !currentAuction || loading
                 }
-                onClick={closeAuction}
+                onClick={() => setShowEndConfirm(true)}
               >
                 End Auction
               </Button>
+
+              <AlertDialog
+                open={showEndConfirm}
+                onOpenChange={setShowEndConfirm}
+              >
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>End Auction?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      Are you sure you want to end this auction? This action
+                      cannot be undone. All participants will be automatically
+                      redirected to the auction joining page.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction
+                      onClick={closeAuction}
+                      className="bg-red-600 hover:bg-red-700"
+                    >
+                      Yes, End Auction
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
             </div>
           </CardContent>
         </Card>

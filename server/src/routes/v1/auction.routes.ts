@@ -11,6 +11,8 @@ import {
   resumeAuction,
   setCurrentPlayer,
   sellCurrent,
+  skipPlayer,
+  undoBid,
 } from "../../controllers/auction.controller.js";
 
 const router = Router();
@@ -33,9 +35,18 @@ router.post(
   requireRoles(["admin", "captain"]),
   placeBid
 );
+// Allow captains to undo their last bid (if no other team has bid after)
+router.post(
+  "/:id/undo-bid",
+  requireAuth,
+  requireRoles(["admin", "captain"]),
+  undoBid
+);
 // Allow authenticated users to trigger auto-sell (for automatic timer-based selling)
 // Backend validates auction state and handles the sale logic securely
 router.post("/:id/sell-current", requireAuth, sellCurrent);
+// Allow captains to skip current player
+router.post("/:id/skip", requireAuth, requireRoles(["captain"]), skipPlayer);
 router.post("/:id/close", requireAuth, requireRoles(["admin"]), closeAuction);
 
 export default router;

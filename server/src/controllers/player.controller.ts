@@ -34,7 +34,8 @@ const updateSchema = Joi.object({
 export async function listPlayers(req: Request, res: Response) {
   const { teamId } = req.query as { teamId?: string };
   const filter = teamId ? { teamId } : {};
-  const players = await Player.find(filter).sort({ name: 1 });
+  // Optimize query - use lean() for read-only operations
+  const players = await Player.find(filter).sort({ name: 1 }).lean();
   return res.status(StatusCodes.OK).json({ players });
 }
 
