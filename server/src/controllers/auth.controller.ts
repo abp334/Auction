@@ -3,6 +3,7 @@ import type { Request, Response } from "express";
 import Joi from "joi";
 import bcrypt from "bcryptjs";
 import { User } from "../models/User.js";
+import { PendingUser } from "../models/PendingUser.js";
 import { Team } from "../models/Team.js";
 import {
   comparePassword,
@@ -87,11 +88,19 @@ export async function signup(req: Request, res: Response) {
   if (error)
     return res.status(StatusCodes.BAD_REQUEST).json({ error: error.message });
 
+  // Check existing active users
   const existing = await User.findOne({ email: value.email });
   if (existing)
     return res
       .status(StatusCodes.CONFLICT)
       .json({ error: "Email already registered" });
+
+  // Check if there's already a pending signup for this email
+  const pendingExisting = await PendingUser.findOne({ email: value.email });
+  if (pendingExisting)
+    return res
+      .status(StatusCodes.CONFLICT)
+      .json({ error: "Signup already in progress for this email" });
 
   const passwordHash = await hashPassword(value.password);
 
@@ -100,12 +109,12 @@ export async function signup(req: Request, res: Response) {
   const otpHash = await bcrypt.hash(otp, 10);
   const otpExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
-  const created = await User.create({
+  // Create a pending signup record (user only created after OTP verification)
+  const pending = await PendingUser.create({
     email: value.email,
     passwordHash,
     name: value.name,
     role: value.role || "player",
-    emailVerified: false,
     otpHash,
     otpExpires,
   });
@@ -113,9 +122,10 @@ export async function signup(req: Request, res: Response) {
   // Send OTP (logs if SMTP not configured)
   sendOtpEmail(value.email, otp).catch(console.error);
 
-  return res
-    .status(StatusCodes.OK)
-    .json({ message: "OTP sent to email. Verify to complete signup." });
+  return res.status(StatusCodes.OK).json({
+    message: "OTP sent to email. Verify to complete signup.",
+    email: pending.email,
+  });
 }
 
 export async function login(req: Request, res: Response) {
@@ -163,42 +173,53 @@ export async function verifySignupOtp(req: Request, res: Response) {
   if (error)
     return res.status(StatusCodes.BAD_REQUEST).json({ error: error.message });
 
-  const user = await User.findOne({ email: value.email });
-  if (!user)
-    return res.status(StatusCodes.NOT_FOUND).json({ error: "User not found" });
-
-  if (user.emailVerified)
+  // Look for pending signup first
+  const pending = await PendingUser.findOne({ email: value.email });
+  if (!pending)
     return res
-      .status(StatusCodes.BAD_REQUEST)
-      .json({ error: "Email already verified" });
+      .status(StatusCodes.NOT_FOUND)
+      .json({ error: "Signup not found or already verified" });
 
-  if (!user.otpHash || !user.otpExpires || user.otpExpires < new Date())
+  if (
+    !pending.otpHash ||
+    !pending.otpExpires ||
+    pending.otpExpires < new Date()
+  )
     return res
       .status(StatusCodes.BAD_REQUEST)
       .json({ error: "OTP expired or not found" });
 
-  const ok = await bcrypt.compare(value.otp, user.otpHash);
+  const ok = await bcrypt.compare(value.otp, pending.otpHash);
   if (!ok)
     return res.status(StatusCodes.BAD_REQUEST).json({ error: "Invalid OTP" });
 
-  user.emailVerified = true;
-  user.otpHash = undefined;
-  user.otpExpires = undefined;
+  // Create final user account
+  const created = await User.create({
+    email: pending.email,
+    passwordHash: pending.passwordHash,
+    name: pending.name,
+    role: pending.role || "player",
+    emailVerified: true,
+  });
 
-  const at = signAccessToken({ sub: user.id, role: user.role });
-  const rt = signRefreshToken({ sub: user.id });
-  user.refreshTokenHash = await hashRefreshToken(rt);
-  await user.save();
+  // Remove pending record
+  await PendingUser.deleteOne({ _id: pending._id });
+
+  // Issue tokens and login user
+  const at = signAccessToken({ sub: created.id, role: created.role });
+  const rt = signRefreshToken({ sub: created.id });
+  created.refreshTokenHash = await hashRefreshToken(rt);
+  await created.save();
   setRefreshCookie(res, rt);
 
   return res.status(StatusCodes.OK).json({
     accessToken: at,
     user: {
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      role: user.role,
-      teamId: user.teamId,
+      id: created.id,
+      email: created.email,
+      name: created.name,
+      role: created.role,
+      teamId: created.teamId,
     },
   });
 }
