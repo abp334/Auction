@@ -26,14 +26,17 @@ const Auth = () => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [isLogin, setIsLogin] = useState(true);
-  const [role, setRole] = useState<"admin" | "captain" | "player">("player");
+  // Signup will only create player accounts from the UI.
+  // Admins can promote users to captains from the admin dashboard.
   const [teamId, setTeamId] = useState("");
   const [teams, setTeams] = useState<Array<{ _id: string; name: string }>>([]);
   const [loadingTeams, setLoadingTeams] = useState(false);
   const [passwordError, setPasswordError] = useState("");
   const navigate = useNavigate();
   const { toast } = useToast();
-  const { user, login, signup } = useAuth();
+  const { user, login, signup, verifySignupOtp } = useAuth();
+  const [showOtp, setShowOtp] = useState(false);
+  const [otp, setOtp] = useState("");
 
   // Redirect if already logged in
   useEffect(() => {
@@ -44,9 +47,9 @@ const Auth = () => {
     }
   }, [user, navigate]);
 
-  // Load teams when role is captain in signup mode
+  // Load teams only when in signup mode (used for optional team selection by admin later)
   useEffect(() => {
-    if (!isLogin && role === "captain") {
+    if (!isLogin) {
       setLoadingTeams(true);
       // Use fetch directly without auth token for public endpoint
       fetch(`${import.meta.env.VITE_API_URL || "/api/v1"}/teams`)
@@ -68,7 +71,7 @@ const Auth = () => {
       setTeams([]);
       setTeamId("");
     }
-  }, [isLogin, role]);
+  }, [isLogin]);
 
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -91,24 +94,31 @@ const Auth = () => {
       });
       return;
     }
-    if (!isLogin && role === "captain" && !teamId) {
-      toast({
-        title: "Error",
-        description: "Please select a team for captain registration",
-        variant: "destructive",
+    if (!isLogin) {
+      // Sign up flow: create account and trigger OTP email
+      const ok = await signup({
+        email,
+        password,
+        name: email.split("@")[0],
       });
+      if (!ok) {
+        toast({
+          title: "Error",
+          description: "Failed to start signup. Try again.",
+          variant: "destructive",
+        });
+        return;
+      }
+      toast({
+        title: "OTP Sent",
+        description: "Check your email for the verification code.",
+      });
+      setShowOtp(true);
       return;
     }
-    const ok = isLogin
-      ? await login(email, password)
-      : await signup({
-          email,
-          password,
-          name: email.split("@")[0],
-          role,
-          teamId: role === "captain" ? teamId : undefined,
-        });
 
+    // Login flow
+    const ok = await login(email, password);
     if (!ok) {
       toast({
         title: "Error",
@@ -118,6 +128,29 @@ const Auth = () => {
       return;
     }
     toast({ title: "Success", description: `Welcome!` });
+    // Navigation will happen via useEffect when user state updates
+  };
+
+  const handleVerifyOtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email || !otp) {
+      toast({
+        title: "Error",
+        description: "Please provide email and OTP",
+        variant: "destructive",
+      });
+      return;
+    }
+    const ok = await verifySignupOtp(email, otp);
+    if (!ok) {
+      toast({
+        title: "Error",
+        description: "Invalid OTP",
+        variant: "destructive",
+      });
+      return;
+    }
+    toast({ title: "Success", description: "Email verified. Welcome!" });
     // Navigation will happen via useEffect when user state updates
   };
 
@@ -140,7 +173,10 @@ const Auth = () => {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <form onSubmit={handleAuth} className="space-y-4">
+          <form
+            onSubmit={showOtp ? handleVerifyOtp : handleAuth}
+            className="space-y-4"
+          >
             <div className="space-y-2">
               <Label htmlFor="email">Email</Label>
               <Input
@@ -167,50 +203,22 @@ const Auth = () => {
                 <span className="text-red-500 text-xs">{passwordError}</span>
               )}
             </div>
-            {/* Show only in Sign Up mode */}
-            {!isLogin && (
-              <>
-                <div className="space-y-2">
-                  <Label htmlFor="role">Role</Label>
-                  <select
-                    id="role"
-                    className="w-full bg-white border border-amber-500 text-black rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-400 transition-colors"
-                    value={role}
-                    onChange={(e) => setRole(e.target.value as any)}
-                  >
-                    <option value="player">Player</option>
-                    <option value="captain">Captain</option>
-                    <option value="admin">Admin</option>
-                  </select>
+            {/* Show OTP verify input after signup */}
+            {!isLogin && showOtp && (
+              <div className="space-y-2">
+                <Label htmlFor="otp">Verification Code</Label>
+                <Input
+                  id="otp"
+                  type="text"
+                  placeholder="Enter 6-digit code"
+                  value={otp}
+                  onChange={(e) => setOtp(e.target.value)}
+                />
+                <div className="text-sm text-gray-400">
+                  We sent a 6-digit code to your email. It expires in 10
+                  minutes.
                 </div>
-                {role === "captain" && (
-                  <div className="space-y-2">
-                    <Label htmlFor="team">Select Team</Label>
-                    {loadingTeams ? (
-                      <div className="text-sm text-muted-foreground py-2">
-                        Loading teams...
-                      </div>
-                    ) : teams.length === 0 ? (
-                      <div className="text-sm text-muted-foreground py-2">
-                        No teams available. Please create a team first.
-                      </div>
-                    ) : (
-                      <Select value={teamId} onValueChange={setTeamId}>
-                        <SelectTrigger className="w-full bg-white border border-amber-500 text-black">
-                          <SelectValue placeholder="Select a team" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {teams.map((team) => (
-                            <SelectItem key={team._id} value={team._id}>
-                              {team.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    )}
-                  </div>
-                )}
-              </>
+              </div>
             )}
             <Button
               type="submit"

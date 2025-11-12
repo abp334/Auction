@@ -2,6 +2,7 @@ import { StatusCodes } from "http-status-codes";
 import type { Request, Response } from "express";
 import Joi from "joi";
 import { Team } from "../models/Team.js";
+import { User } from "../models/User.js";
 
 const createSchema = Joi.object({
   name: Joi.string().min(2).required(),
@@ -51,6 +52,21 @@ export async function createTeam(req: Request, res: Response) {
       .json({ error: "Team name already exists" });
 
   const team = await Team.create(value);
+
+  // If a captainId was provided, promote that user to captain and bind to team
+  if (value.captainId) {
+    const user = await User.findById(value.captainId);
+    if (user) {
+      user.role = "captain";
+      user.teamId = (team as any)._id.toString();
+      await user.save();
+      // Update team readable captain name and captainId
+      team.captainId = (user as any)._id.toString();
+      team.captain = user.name;
+      await team.save();
+    }
+  }
+
   return res.status(StatusCodes.CREATED).json({ team });
 }
 
@@ -63,6 +79,21 @@ export async function updateTeam(req: Request, res: Response) {
   const team = await Team.findByIdAndUpdate(id, value, { new: true });
   if (!team)
     return res.status(StatusCodes.NOT_FOUND).json({ error: "Team not found" });
+  // If captainId changed, promote that user and bind
+  if (value.captainId) {
+    const user = await User.findById(value.captainId);
+    if (user) {
+      user.role = "captain";
+      user.teamId = team.id;
+      await user.save();
+      team.captainId = (user as any)._id.toString();
+      team.captain = user.name;
+      await team.save();
+    }
+  } else if (value.captainId === null) {
+    // clearing captain: don't demote user automatically here
+  }
+
   return res.status(StatusCodes.OK).json({ team });
 }
 

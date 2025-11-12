@@ -5,6 +5,41 @@ import { Team } from "../models/Team.js";
 
 // Store active timers for auctions
 const activeTimers = new Map<string, NodeJS.Timeout>();
+// In-memory per-auction player queues to reduce DB lookups and improve performance.
+export const auctionPlayerQueues = new Map<string, string[]>();
+
+// Initialize in-memory queue for an auction (loads unsold players into memory).
+export async function initAuctionQueue(auctionId: string) {
+  try {
+    const auction = await Auction.findById(auctionId).select(
+      "players sales unsoldPlayers"
+    );
+    if (!auction) return;
+    const soldPlayerIds = (auction.sales || []).map((s: any) => s.playerId);
+    const excludeIds = [...soldPlayerIds, ...(auction.unsoldPlayers || [])];
+
+    // Load player ids once and store - keep ordering stable by _id
+    const players = await Player.find({
+      $or: [
+        { teamId: { $exists: false } },
+        { teamId: null },
+        { teamId: "" },
+        { teamId: "UNSOLD" },
+      ],
+      _id: { $nin: excludeIds },
+    })
+      .select("_id")
+      .sort({ _id: 1 })
+      .lean();
+
+    auctionPlayerQueues.set(
+      auctionId,
+      players.map((p: any) => (p._id || p.id).toString())
+    );
+  } catch (err) {
+    console.error("Failed to init auction queue:", err);
+  }
+}
 
 export async function startAuctionTimer(auctionId: string, roomCode: string) {
   // Clear existing timer if any
@@ -259,6 +294,61 @@ export async function moveToNextPlayer(auctionId: string, roomCode: string) {
   const auction = await Auction.findById(auctionId);
   if (!auction) return;
 
+  // Try using in-memory queue first (faster, fewer DB queries)
+  const queue = auctionPlayerQueues.get(auctionId) || [];
+  let nextPlayerId: string | null = null;
+
+  while (queue.length > 0) {
+    const candidateId = queue.shift() as string;
+    // Ensure candidate isn't sold/unsold in this auction
+    const soldPlayerIds = (auction.sales || []).map((s: any) => s.playerId);
+    if (
+      soldPlayerIds.includes(candidateId) ||
+      (auction.unsoldPlayers || []).includes(candidateId)
+    ) {
+      continue;
+    }
+    // Found next
+    nextPlayerId = candidateId;
+    break;
+  }
+
+  // Persist modified queue
+  auctionPlayerQueues.set(auctionId, queue);
+
+  if (nextPlayerId) {
+    // Load minimal player info for broadcast
+    const nextUnsoldPlayer = await Player.findById(nextPlayerId).select(
+      "_id name photo age role bowlerType basePrice teamId"
+    );
+    if (nextUnsoldPlayer) {
+      auction.currentPlayerId = nextPlayerId;
+      auction.currentBid = undefined;
+      auction.skippedTeams = [];
+      auction.timerStart = new Date();
+      await auction.save();
+
+      // Start timer for new player
+      await startAuctionTimer(auctionId, roomCode);
+
+      const io = getIO();
+      io.to(roomCode).emit("auction:player_changed", {
+        playerId: nextPlayerId,
+        player: {
+          id: nextPlayerId,
+          name: nextUnsoldPlayer.name,
+          photo: nextUnsoldPlayer.photo || "",
+          age: nextUnsoldPlayer.age || 25,
+          role: nextUnsoldPlayer.role || "",
+          bowlerType: nextUnsoldPlayer.bowlerType || "",
+          basePrice: nextUnsoldPlayer.basePrice || 1000,
+        },
+      });
+      return;
+    }
+  }
+
+  // Fallback to DB scan if queue exhausted or candidate not found
   // Optimize query - only fetch needed fields for player display
   // During an active auction, exclude players that went unsold in THIS auction
   // But include players unsold from previous auctions

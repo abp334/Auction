@@ -12,6 +12,7 @@ import {
   startAuctionTimer,
   stopAuctionTimer,
   resetAuctionTimer,
+  initAuctionQueue,
 } from "../utils/timer.js";
 
 const createSchema = Joi.object({
@@ -77,35 +78,17 @@ export async function startAuction(req: Request, res: Response) {
       .status(StatusCodes.NOT_FOUND)
       .json({ error: "Auction not found" });
 
-  // Automatically select first unsold player - optimize query
-  // For a NEW auction, include:
-  // - Players never sold (teamId is null/undefined/empty)
-  // - Players unsold in PREVIOUS auctions (teamId = "UNSOLD")
-  // Exclude players that are sold in THIS auction (tracked in sales array)
-  // Exclude players that went unsold in THIS auction (tracked in unsoldPlayers array)
-  const soldPlayerIds = (auction.sales || []).map((s: any) => s.playerId);
-  const firstUnsoldPlayer = await Player.findOne({
-    $or: [
-      { teamId: { $exists: false } },
-      { teamId: null },
-      { teamId: "" },
-      { teamId: "UNSOLD" }, // Include players unsold in previous auctions
-    ],
-    // Exclude players sold in THIS auction
-    _id: { $nin: [...soldPlayerIds, ...(auction.unsoldPlayers || [])] },
-  })
-    .select("_id name photo age role bowlerType basePrice teamId")
-    .sort({ _id: 1 });
+  // Initialize an in-memory player queue and pick the first player from it.
+  try {
+    await initAuctionQueue(id);
+    const queue =
+      (await import("../utils/timer.js")).auctionPlayerQueues.get(id) || [];
+    const nextPlayerId = queue.shift();
+    // Persist modified queue
+    (await import("../utils/timer.js")).auctionPlayerQueues.set(id, queue);
 
-  // Double-check that player is available (not sold and not unsold in this auction)
-  if (firstUnsoldPlayer) {
-    const playerId =
-      firstUnsoldPlayer.id || (firstUnsoldPlayer as any)._id.toString();
-    if (
-      !soldPlayerIds.includes(playerId) &&
-      !auction.unsoldPlayers?.includes(playerId)
-    ) {
-      auction.currentPlayerId = playerId;
+    if (nextPlayerId) {
+      auction.currentPlayerId = nextPlayerId;
       auction.currentBid = undefined;
       auction.skippedTeams = [];
       await auction.save();
@@ -115,27 +98,32 @@ export async function startAuction(req: Request, res: Response) {
 
       // Broadcast to all clients
       try {
+        const p = await Player.findById(nextPlayerId).select(
+          "_id name photo age role bowlerType basePrice"
+        );
         const io = getIO();
         io.to(auction.roomCode).emit("auction:player_changed", {
-          playerId: playerId,
+          playerId: nextPlayerId,
           player: {
-            id: playerId,
-            name: firstUnsoldPlayer.name,
-            photo: firstUnsoldPlayer.photo || "",
-            age: firstUnsoldPlayer.age || 25,
-            role: firstUnsoldPlayer.role || "",
-            bowlerType: firstUnsoldPlayer.bowlerType || "",
-            basePrice: firstUnsoldPlayer.basePrice || 1000,
+            id: nextPlayerId,
+            name: p?.name || "Player",
+            photo: p?.photo || "",
+            age: p?.age || 25,
+            role: p?.role || "",
+            bowlerType: p?.bowlerType || "",
+            basePrice: p?.basePrice || 1000,
           },
         });
       } catch (err) {
         console.error("Error broadcasting player_changed:", err);
       }
     } else {
-      console.log("Player found but already sold or unsold in this auction");
+      console.log(
+        "No unsold players found when starting auction (queue empty)"
+      );
     }
-  } else {
-    console.log("No unsold players found when starting auction");
+  } catch (err) {
+    console.error("Failed to initialize auction queue:", err);
   }
 
   return res.status(StatusCodes.OK).json({ auction });

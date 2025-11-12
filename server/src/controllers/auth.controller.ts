@@ -1,6 +1,7 @@
 import { StatusCodes } from "http-status-codes";
 import type { Request, Response } from "express";
 import Joi from "joi";
+import bcrypt from "bcryptjs";
 import { User } from "../models/User.js";
 import { Team } from "../models/Team.js";
 import {
@@ -13,13 +14,53 @@ import {
   compareRefreshToken,
 } from "../utils/auth.js";
 
+// Signup from public UI should only create 'player' accounts.
 const signupSchema = Joi.object({
   email: Joi.string().email().required(),
   password: Joi.string().min(8).required(),
   name: Joi.string().min(2).required(),
-  role: Joi.string().valid("admin", "captain", "player").required(),
-  teamId: Joi.string().optional(),
 });
+
+const verifyOtpSchema = Joi.object({
+  email: Joi.string().email().required(),
+  otp: Joi.string().length(6).required(),
+});
+
+async function sendOtpEmail(email: string, otp: string) {
+  const host = process.env.SMTP_HOST;
+  const port = process.env.SMTP_PORT
+    ? Number(process.env.SMTP_PORT)
+    : undefined;
+  const user = process.env.SMTP_USER;
+  const pass = process.env.SMTP_PASS;
+  const message = `Your verification code is ${otp}. It will expire in 10 minutes.`;
+
+  // If SMTP is configured, send email. Otherwise fallback to logging OTP.
+  if (host && user && pass) {
+    try {
+      const nodemailer = await import("nodemailer");
+      const transporter = nodemailer.createTransport({
+        host,
+        port,
+        secure: !!process.env.SMTP_SECURE,
+        auth: { user, pass },
+      });
+      await transporter.sendMail({
+        from: process.env.SMTP_FROM || "no-reply@example.com",
+        to: email,
+        subject: "Your verification code",
+        text: message,
+        html: `<p>${message}</p>`,
+      });
+      return;
+    } catch (err) {
+      console.error("Failed to send OTP email via SMTP", err);
+    }
+  }
+
+  // Fallback: log OTP to server logs for development / manual delivery.
+  console.info(`OTP for ${email}: ${otp}`);
+}
 
 const loginSchema = Joi.object({
   email: Joi.string().email().required(),
@@ -50,49 +91,30 @@ export async function signup(req: Request, res: Response) {
       .status(StatusCodes.CONFLICT)
       .json({ error: "Email already registered" });
 
-  // Validate team exists for captains
-  if (value.role === "captain" && value.teamId) {
-    const team = await Team.findById(value.teamId);
-    if (!team)
-      return res
-        .status(StatusCodes.BAD_REQUEST)
-        .json({ error: "Selected team does not exist" });
-
-    // Check if team already has a captain
-    const existingCaptain = await User.findOne({
-      teamId: value.teamId,
-      role: "captain",
-    });
-    if (existingCaptain)
-      return res
-        .status(StatusCodes.CONFLICT)
-        .json({ error: "Team already has a captain" });
-  }
-
   const passwordHash = await hashPassword(value.password);
+
+  // Generate OTP and persist hashed OTP on the user record.
+  const otp = Math.floor(100000 + Math.random() * 900000).toString();
+  const otpHash = await bcrypt.hash(otp, 10);
+  const otpExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+  // Enforce 'player' role for public signup
   const created = await User.create({
     email: value.email,
     passwordHash,
     name: value.name,
-    role: value.role,
-    teamId: value.teamId,
+    role: "player",
+    emailVerified: false,
+    otpHash,
+    otpExpires,
   });
 
-  const at = signAccessToken({ sub: created.id, role: created.role });
-  const rt = signRefreshToken({ sub: created.id });
-  created.refreshTokenHash = await hashRefreshToken(rt);
-  await created.save();
-  setRefreshCookie(res, rt);
-  return res.status(StatusCodes.CREATED).json({
-    accessToken: at,
-    user: {
-      id: created.id,
-      email: created.email,
-      name: created.name,
-      role: created.role,
-      teamId: created.teamId,
-    },
-  });
+  // Send OTP (logs if SMTP not configured)
+  sendOtpEmail(value.email, otp).catch(console.error);
+
+  return res
+    .status(StatusCodes.OK)
+    .json({ message: "OTP sent to email. Verify to complete signup." });
 }
 
 export async function login(req: Request, res: Response) {
@@ -111,12 +133,63 @@ export async function login(req: Request, res: Response) {
     return res
       .status(StatusCodes.UNAUTHORIZED)
       .json({ error: "Invalid credentials" });
+  // Require email verification
+  if (!user.emailVerified) {
+    return res
+      .status(StatusCodes.FORBIDDEN)
+      .json({ error: "Email not verified. Please verify your email first." });
+  }
 
   const at = signAccessToken({ sub: user.id, role: user.role });
   const rt = signRefreshToken({ sub: user.id });
   user.refreshTokenHash = await hashRefreshToken(rt);
   await user.save();
   setRefreshCookie(res, rt);
+  return res.status(StatusCodes.OK).json({
+    accessToken: at,
+    user: {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      role: user.role,
+      teamId: user.teamId,
+    },
+  });
+}
+
+export async function verifySignupOtp(req: Request, res: Response) {
+  const { error, value } = verifyOtpSchema.validate(req.body);
+  if (error)
+    return res.status(StatusCodes.BAD_REQUEST).json({ error: error.message });
+
+  const user = await User.findOne({ email: value.email });
+  if (!user)
+    return res.status(StatusCodes.NOT_FOUND).json({ error: "User not found" });
+
+  if (user.emailVerified)
+    return res
+      .status(StatusCodes.BAD_REQUEST)
+      .json({ error: "Email already verified" });
+
+  if (!user.otpHash || !user.otpExpires || user.otpExpires < new Date())
+    return res
+      .status(StatusCodes.BAD_REQUEST)
+      .json({ error: "OTP expired or not found" });
+
+  const ok = await bcrypt.compare(value.otp, user.otpHash);
+  if (!ok)
+    return res.status(StatusCodes.BAD_REQUEST).json({ error: "Invalid OTP" });
+
+  user.emailVerified = true;
+  user.otpHash = undefined;
+  user.otpExpires = undefined;
+
+  const at = signAccessToken({ sub: user.id, role: user.role });
+  const rt = signRefreshToken({ sub: user.id });
+  user.refreshTokenHash = await hashRefreshToken(rt);
+  await user.save();
+  setRefreshCookie(res, rt);
+
   return res.status(StatusCodes.OK).json({
     accessToken: at,
     user: {

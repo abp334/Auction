@@ -4,6 +4,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   Dialog,
   DialogContent,
   DialogHeader,
@@ -37,9 +44,13 @@ const TeamsTab = () => {
     owner: "",
     mobile: "",
     email: "",
+    captainId: "",
     captain: "",
     purse: 100000,
   });
+  const [users, setUsers] = useState<
+    Array<{ _id: string; name: string; email: string }>
+  >([]);
 
   useEffect(() => {
     (async () => {
@@ -64,6 +75,16 @@ const TeamsTab = () => {
       }
       setLoading(false);
     })();
+    // Load admin user list for captain assignment
+    (async () => {
+      const res = await apiFetch("/users");
+      if (res.ok) {
+        const { users } = await res.json();
+        setUsers(users || []);
+      } else {
+        setUsers([]);
+      }
+    })();
   }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -80,7 +101,8 @@ const TeamsTab = () => {
             owner: formData.owner,
             mobile: formData.mobile,
             email: formData.email,
-            captain: formData.captain,
+            captainId: formData.captainId || undefined,
+            captain: formData.captain || undefined,
           }),
         });
         if (res.ok) {
@@ -96,6 +118,15 @@ const TeamsTab = () => {
                 : t
             )
           );
+          // If captainId was provided, promote that user to captain for this team
+          if (formData.captainId) {
+            await apiFetch(`/users/${formData.captainId}/promote`, {
+              method: "POST",
+              body: JSON.stringify({ teamId: team._id }),
+            }).catch(() => {
+              /* ignore promote failures - admin can retry */
+            });
+          }
           toast({ title: "Success", description: "Team updated successfully" });
         } else {
           toast({ title: "Error", description: "Failed to update team" });
@@ -110,7 +141,8 @@ const TeamsTab = () => {
             owner: formData.owner,
             mobile: formData.mobile,
             email: formData.email,
-            captain: formData.captain,
+            captainId: formData.captainId || undefined,
+            captain: formData.captain || undefined,
           }),
         });
         if (res.ok) {
@@ -123,6 +155,15 @@ const TeamsTab = () => {
               purse: team.wallet,
             },
           ]);
+          // Promote selected user to captain for the newly created team
+          if (formData.captainId) {
+            await apiFetch(`/users/${formData.captainId}/promote`, {
+              method: "POST",
+              body: JSON.stringify({ teamId: team._id }),
+            }).catch(() => {
+              /* ignore promote failures - admin can retry */
+            });
+          }
           toast({ title: "Success", description: "Team added successfully" });
         } else {
           toast({ title: "Error", description: "Failed to add team" });
@@ -137,7 +178,11 @@ const TeamsTab = () => {
 
   const handleEdit = (team: Team) => {
     setEditingTeam(team);
-    setFormData(team);
+    setFormData({
+      ...team,
+      captainId: (team as any).captainId || "",
+      captain: team.captain || "",
+    });
     setIsOpen(true);
   };
 
@@ -161,6 +206,7 @@ const TeamsTab = () => {
       owner: "",
       mobile: "",
       email: "",
+      captainId: "",
       captain: "",
       purse: 100000,
     });
@@ -244,15 +290,42 @@ const TeamsTab = () => {
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="captain">Captain Name</Label>
-                  <Input
-                    id="captain"
-                    value={formData.captain}
-                    onChange={(e) =>
-                      setFormData({ ...formData, captain: e.target.value })
-                    }
-                    required
-                  />
+                  <Label htmlFor="captain">
+                    Captain (select existing user)
+                  </Label>
+                  {users.length === 0 ? (
+                    <Input
+                      id="captain"
+                      value={formData.captain}
+                      onChange={(e) =>
+                        setFormData({ ...formData, captain: e.target.value })
+                      }
+                      placeholder="No users available"
+                    />
+                  ) : (
+                    <Select
+                      value={formData.captainId}
+                      onValueChange={(value) =>
+                        setFormData({
+                          ...formData,
+                          captainId: value,
+                          captain:
+                            users.find((u) => u._id === value)?.name || "",
+                        })
+                      }
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {users.map((u) => (
+                          <SelectItem key={u._id} value={u._id}>
+                            {u.name} — {u.email}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
                 </div>
                 <div className="space-y-2 col-span-2">
                   <Label htmlFor="purse">Starting Purse ($)</Label>

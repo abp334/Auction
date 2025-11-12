@@ -11,6 +11,8 @@ import { registerAuctionSocketHandlers } from "./sockets/auction.js";
 import { apiRouter } from "./routes/index.js";
 import { setIO } from "./sockets/io.js";
 import { errorHandler, notFound } from "./middleware/error.js";
+import { verifyAccessToken } from "./utils/auth.js";
+import { User } from "./models/User.js";
 
 const app: Application = express();
 const server = http.createServer(app);
@@ -52,6 +54,25 @@ app.use(errorHandler);
 // Socket handlers
 io.on("connection", (socket) => {
   registerAuctionSocketHandlers(io, socket);
+});
+
+// Socket auth middleware - optionally attach user info when token provided.
+io.use(async (socket, next) => {
+  try {
+    const token = socket.handshake.auth?.token as string | undefined;
+    if (!token) return next(new Error("Authentication required"));
+    const payload = verifyAccessToken(token);
+    // Attach minimal user info to socket.data
+    socket.data.user = { id: payload.sub, role: payload.role };
+    // Load teamId for captains (cached on socket)
+    const dbUser = await User.findById(payload.sub).select("teamId").lean();
+    if (dbUser) {
+      (socket.data as any).teamId = dbUser.teamId;
+    }
+    return next();
+  } catch (err) {
+    return next(new Error("Authentication error"));
+  }
 });
 
 const PORT = process.env.PORT ? Number(process.env.PORT) : 5000;

@@ -140,200 +140,213 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
     })();
 
     // Connect socket and join room
-    // Socket.IO connects to backend server (not proxied API)
+    // Socket.IO connects to backend server (not proxied API).
+    // Use VITE_SERVER_URL when provided, otherwise fall back to the current page origin
+    // so the hosted site connects to its own backend automatically.
     const backendUrl =
-      import.meta.env.VITE_SERVER_URL || "http://localhost:5001";
-    const s = io(backendUrl, {
-      withCredentials: true,
-      transports: ["websocket", "polling"],
-    });
-    s.emit("auction:join", roomCode);
-    s.on("auction:bid_update", (e: any) => {
-      // Find team name from teams ref (always has latest teams)
-      const team = teamsRef.current.find((t) => t.id === e.teamId);
-      const teamName =
-        team?.name || `Team ${e.teamId?.substring(0, 6) || "Unknown"}`;
-      setCommentary((prev) =>
-        [`Bid: $${e.amount.toLocaleString()} by ${teamName}`, ...prev].slice(
-          0,
-          10
-        )
-      );
-      setCurrentPlayer((p) => (p ? { ...p, currentBid: e.amount } : null));
-      // Update auction state with current bid
-      setAuction((prev: any) =>
-        prev
-          ? { ...prev, currentBid: { amount: e.amount, teamId: e.teamId } }
-          : null
-      );
-      // Update last bid team
-      setLastBidTeam(e.teamId);
-      // Timer will be reset by server
-    });
-    s.on(
-      "auction:bid_undo",
-      (e: {
-        teamId: string;
-        teamName: string;
-        currentBid?: { amount: number; teamId: string };
-      }) => {
-        setCommentary((prev) =>
-          [`${e.teamName} withdrew their bid.`, ...prev].slice(0, 10)
-        );
-        if (e.currentBid) {
-          setCurrentPlayer((p) =>
-            p ? { ...p, currentBid: e.currentBid!.amount } : null
-          );
-          setAuction((prev: any) =>
-            prev ? { ...prev, currentBid: e.currentBid } : null
-          );
-          setLastBidTeam(e.currentBid.teamId);
-        } else {
-          // No more bids - reset to base price (1000)
-          setCurrentPlayer((p) => (p ? { ...p, currentBid: 1000 } : null));
-          setAuction((prev: any) =>
-            prev ? { ...prev, currentBid: undefined } : null
-          );
-          setLastBidTeam(null);
-        }
-      }
-    );
-    s.on("auction:sale", async (e: any) => {
-      // First, refresh teams to get latest data
-      const tRes = await apiFetch("/teams");
-      if (tRes.ok) {
-        const { teams: freshTeams } = await tRes.json();
-        const mappedTeams = freshTeams.map((t: any) => ({
-          id: t._id,
-          name: t.name,
-          logo: t.logo || "🏆",
-          captain: t.captain || "",
-          purse: t.wallet || 0,
-          players: 0,
-        }));
-        setTeams(mappedTeams);
-        teamsRef.current = mappedTeams;
-
-        // Use team name and player name from socket event (backend sends them)
-        const teamName =
-          e.teamName ||
-          mappedTeams.find((t) => t.id === e.teamId)?.name ||
-          `Team ${e.teamId?.substring(0, 6) || "Unknown"}`;
-        const playerName = e.playerName || currentPlayer?.name || "Player";
-
-        setCommentary((prev) =>
-          [
-            `${playerName} goes to ${teamName} for $${e.price.toLocaleString()}`,
-            ...prev,
-          ].slice(0, 10)
-        );
-      } else {
-        // Fallback if teams fetch fails
+      import.meta.env.VITE_SERVER_URL ||
+      (typeof window !== "undefined" && window.location.origin) ||
+      "http://localhost:5001";
+    // Attach access token if available so the server can authenticate socket connections.
+    // We import getAccessToken dynamically to avoid circular import timing issues.
+    let s: Socket | null = null;
+    import("@/lib/api").then(({ getAccessToken }) => {
+      const token = getAccessToken ? getAccessToken() : null;
+      s = io(backendUrl, {
+        withCredentials: true,
+        transports: ["websocket", "polling"],
+        auth: { token },
+      });
+      s.emit("auction:join", roomCode);
+      s.on("auction:bid_update", (e: any) => {
+        // Find team name from teams ref (always has latest teams)
         const team = teamsRef.current.find((t) => t.id === e.teamId);
         const teamName =
-          e.teamName ||
-          team?.name ||
-          `Team ${e.teamId?.substring(0, 6) || "Unknown"}`;
-        const playerName = e.playerName || currentPlayer?.name || "Player";
+          team?.name || `Team ${e.teamId?.substring(0, 6) || "Unknown"}`;
         setCommentary((prev) =>
-          [
-            `${playerName} goes to ${teamName} for $${e.price.toLocaleString()}`,
-            ...prev,
-          ].slice(0, 10)
+          [`Bid: $${e.amount.toLocaleString()} by ${teamName}`, ...prev].slice(
+            0,
+            10
+          )
         );
-      }
-
-      // Refresh purchased players if it's my team
-      if (e.teamId === myTeamId) {
-        apiFetch(`/players?teamId=${myTeamId}`).then(async (res) => {
-          if (res.ok) {
-            const { players } = await res.json();
-            setMyTeamPlayers(
-              players.map((p: any) => ({
-                id: p._id,
-                name: p.name,
-                photo: p.photo || "",
-                currentBid: p.basePrice || 0,
-                age: p.age || 25,
-                batsmanType: p.role || "",
-                bowlerType: p.bowlerType || "Not a Bowler",
-              }))
+        setCurrentPlayer((p) => (p ? { ...p, currentBid: e.amount } : null));
+        // Update auction state with current bid
+        setAuction((prev: any) =>
+          prev
+            ? { ...prev, currentBid: { amount: e.amount, teamId: e.teamId } }
+            : null
+        );
+        // Update last bid team
+        setLastBidTeam(e.teamId);
+        // Timer will be reset by server
+      });
+      s.on(
+        "auction:bid_undo",
+        (e: {
+          teamId: string;
+          teamName: string;
+          currentBid?: { amount: number; teamId: string };
+        }) => {
+          setCommentary((prev) =>
+            [`${e.teamName} withdrew their bid.`, ...prev].slice(0, 10)
+          );
+          if (e.currentBid) {
+            setCurrentPlayer((p) =>
+              p ? { ...p, currentBid: e.currentBid!.amount } : null
             );
+            setAuction((prev: any) =>
+              prev ? { ...prev, currentBid: e.currentBid } : null
+            );
+            setLastBidTeam(e.currentBid.teamId);
+          } else {
+            // No more bids - reset to base price (1000)
+            setCurrentPlayer((p) => (p ? { ...p, currentBid: 1000 } : null));
+            setAuction((prev: any) =>
+              prev ? { ...prev, currentBid: undefined } : null
+            );
+            setLastBidTeam(null);
           }
+        }
+      );
+      s.on("auction:sale", async (e: any) => {
+        // First, refresh teams to get latest data
+        const tRes = await apiFetch("/teams");
+        if (tRes.ok) {
+          const { teams: freshTeams } = await tRes.json();
+          const mappedTeams = freshTeams.map((t: any) => ({
+            id: t._id,
+            name: t.name,
+            logo: t.logo || "🏆",
+            captain: t.captain || "",
+            purse: t.wallet || 0,
+            players: 0,
+          }));
+          setTeams(mappedTeams);
+          teamsRef.current = mappedTeams;
+
+          // Use team name and player name from socket event (backend sends them)
+          const teamName =
+            e.teamName ||
+            mappedTeams.find((t) => t.id === e.teamId)?.name ||
+            `Team ${e.teamId?.substring(0, 6) || "Unknown"}`;
+          const playerName = e.playerName || currentPlayer?.name || "Player";
+
+          setCommentary((prev) =>
+            [
+              `${playerName} goes to ${teamName} for $${e.price.toLocaleString()}`,
+              ...prev,
+            ].slice(0, 10)
+          );
+        } else {
+          // Fallback if teams fetch fails
+          const team = teamsRef.current.find((t) => t.id === e.teamId);
+          const teamName =
+            e.teamName ||
+            team?.name ||
+            `Team ${e.teamId?.substring(0, 6) || "Unknown"}`;
+          const playerName = e.playerName || currentPlayer?.name || "Player";
+          setCommentary((prev) =>
+            [
+              `${playerName} goes to ${teamName} for $${e.price.toLocaleString()}`,
+              ...prev,
+            ].slice(0, 10)
+          );
+        }
+
+        // Refresh purchased players if it's my team
+        if (e.teamId === myTeamId) {
+          apiFetch(`/players?teamId=${myTeamId}`).then(async (res) => {
+            if (res.ok) {
+              const { players } = await res.json();
+              setMyTeamPlayers(
+                players.map((p: any) => ({
+                  id: p._id,
+                  name: p.name,
+                  photo: p.photo || "",
+                  currentBid: p.basePrice || 0,
+                  age: p.age || 25,
+                  batsmanType: p.role || "",
+                  bowlerType: p.bowlerType || "Not a Bowler",
+                }))
+              );
+            }
+          });
+        }
+      });
+      s!.on("auction:player_changed", (e: any) => {
+        setCommentary((prev) =>
+          [`New player: ${e.player.name}`, ...prev].slice(0, 10)
+        );
+        setCurrentPlayer({
+          id: e.player.id,
+          name: e.player.name,
+          photo: e.player.photo || "",
+          currentBid: e.player.basePrice || 1000,
+          age: e.player.age || 25,
+          batsmanType: e.player.role || "",
+          bowlerType: e.player.bowlerType || "Not a Bowler",
         });
-      }
-    });
-    s.on("auction:player_changed", (e: any) => {
-      setCommentary((prev) =>
-        [`New player: ${e.player.name}`, ...prev].slice(0, 10)
-      );
-      setCurrentPlayer({
-        id: e.player.id,
-        name: e.player.name,
-        photo: e.player.photo || "",
-        currentBid: e.player.basePrice || 1000,
-        age: e.player.age || 25,
-        batsmanType: e.player.role || "",
-        bowlerType: e.player.bowlerType || "Not a Bowler",
+        setTimeLeft(30); // Will be updated by server timer broadcast
+        setHasSkipped(false); // Reset skip state for new player
+        // Clear auction currentBid when new player is set
+        setAuction((prev: any) =>
+          prev ? { ...prev, currentBid: undefined } : null
+        );
       });
-      setTimeLeft(30); // Will be updated by server timer broadcast
-      setHasSkipped(false); // Reset skip state for new player
-      // Clear auction currentBid when new player is set
-      setAuction((prev: any) =>
-        prev ? { ...prev, currentBid: undefined } : null
-      );
-    });
-    s.on("auction:skip", (e: { teamId: string; teamName: string }) => {
-      setCommentary((prev) =>
-        [`${e.teamName} skipped this player.`, ...prev].slice(0, 10)
-      );
-      // If it's my team, mark as skipped
-      if (e.teamId === myTeamId || e.teamId === user?.teamId) {
-        setHasSkipped(true);
-      }
-    });
-    s.on("auction:unsold", (e: { playerId: string; playerName: string }) => {
-      setCommentary((prev) =>
-        [`${e.playerName} went unsold.`, ...prev].slice(0, 10)
-      );
-    });
-    s.on("auction:completed", (e: any) => {
-      setCommentary((prev) =>
-        [e.message || "Auction completed!", ...prev].slice(0, 10)
-      );
-      setCurrentPlayer(null);
-      // Update auction state to completed
-      setAuction((prev: any) =>
-        prev ? { ...prev, state: "completed" } : null
-      );
-      toast({
-        title: "Auction Completed",
-        description: "All players have been sold!",
+      s!.on("auction:skip", (e: { teamId: string; teamName: string }) => {
+        setCommentary((prev) =>
+          [`${e.teamName} skipped this player.`, ...prev].slice(0, 10)
+        );
+        // If it's my team, mark as skipped
+        if (e.teamId === myTeamId || e.teamId === user?.teamId) {
+          setHasSkipped(true);
+        }
       });
-    });
-    s.on("auction:ended", (e: { message: string; auctionId: string }) => {
-      setCommentary((prev) =>
-        [e.message || "Auction ended by admin", ...prev].slice(0, 10)
-      );
-      setCurrentPlayer(null);
-      setAuction((prev: any) =>
-        prev ? { ...prev, state: "completed" } : null
-      );
-      toast({
-        title: "Auction Ended",
-        description: "The auction has been ended by admin. Redirecting...",
-        variant: "destructive",
+      s!.on("auction:unsold", (e: { playerId: string; playerName: string }) => {
+        setCommentary((prev) =>
+          [`${e.playerName} went unsold.`, ...prev].slice(0, 10)
+        );
       });
-      // Redirect to joining page after 2 seconds
-      setTimeout(() => {
-        onExit();
-      }, 2000);
+      s!.on("auction:completed", (e: any) => {
+        setCommentary((prev) =>
+          [e.message || "Auction completed!", ...prev].slice(0, 10)
+        );
+        setCurrentPlayer(null);
+        // Update auction state to completed
+        setAuction((prev: any) =>
+          prev ? { ...prev, state: "completed" } : null
+        );
+        toast({
+          title: "Auction Completed",
+          description: "All players have been sold!",
+        });
+      });
+      s!.on("auction:ended", (e: { message: string; auctionId: string }) => {
+        setCommentary((prev) =>
+          [e.message || "Auction ended by admin", ...prev].slice(0, 10)
+        );
+        setCurrentPlayer(null);
+        setAuction((prev: any) =>
+          prev ? { ...prev, state: "completed" } : null
+        );
+        toast({
+          title: "Auction Ended",
+          description: "The auction has been ended by admin. Redirecting...",
+          variant: "destructive",
+        });
+        // Redirect to joining page after 2 seconds
+        setTimeout(() => {
+          onExit();
+        }, 2000);
+      });
+      setSocket(s!);
     });
-    setSocket(s);
 
     return () => {
-      s.emit("auction:leave", roomCode);
-      s.disconnect();
+      if (s) {
+        s.emit("auction:leave", roomCode);
+        s.disconnect();
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roomCode, role, user, myTeamId]);
@@ -411,40 +424,57 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
     );
 
     try {
-      const res = await apiFetch(`/auctions/${auctionId}/bid`, {
-        method: "POST",
-        body: JSON.stringify({
+      // Emit bid over socket for low-latency path; fallback to HTTP if socket unavailable
+      if (socket) {
+        socket.emit("auction:bid", {
+          auctionId,
+          roomCode,
           amount: newBid,
-          teamId: teamId,
+          teamId,
           playerId: currentPlayer.id,
-        }),
-      });
-      if (!res.ok) {
-        // Revert optimistic update on error
-        const { error } = await res
-          .json()
-          .catch(() => ({ error: "Bid failed" }));
-
-        // Revert to previous bid
-        const previousBid =
-          auction?.currentBid?.amount ||
-          currentPlayer.currentBid - 1000 ||
-          1000;
-        setCurrentPlayer((p) => (p ? { ...p, currentBid: previousBid } : null));
-        setAuction((prev: any) =>
-          prev ? { ...prev, currentBid: auction?.currentBid } : null
-        );
-
-        toast({
-          title: "Bid failed",
-          description: error,
-          variant: "destructive",
         });
-      } else {
         toast({
-          title: "Bid Placed",
+          title: "Bid Sent",
           description: `$${newBid.toLocaleString()}`,
         });
+      } else {
+        const res = await apiFetch(`/auctions/${auctionId}/bid`, {
+          method: "POST",
+          body: JSON.stringify({
+            amount: newBid,
+            teamId: teamId,
+            playerId: currentPlayer.id,
+          }),
+        });
+        if (!res.ok) {
+          // Revert optimistic update on error
+          const { error } = await res
+            .json()
+            .catch(() => ({ error: "Bid failed" }));
+
+          // Revert to previous bid
+          const previousBid =
+            auction?.currentBid?.amount ||
+            currentPlayer.currentBid - 1000 ||
+            1000;
+          setCurrentPlayer((p) =>
+            p ? { ...p, currentBid: previousBid } : null
+          );
+          setAuction((prev: any) =>
+            prev ? { ...prev, currentBid: auction?.currentBid } : null
+          );
+
+          toast({
+            title: "Bid failed",
+            description: error,
+            variant: "destructive",
+          });
+        } else {
+          toast({
+            title: "Bid Placed",
+            description: `$${newBid.toLocaleString()}`,
+          });
+        }
       }
     } catch (err) {
       // Revert optimistic update on error
