@@ -26,9 +26,10 @@ const Auth = () => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [isLogin, setIsLogin] = useState(true);
-  // Signup will only create player accounts from the UI.
+  // Signup can create player or admin accounts from the UI.
   // Admins can promote users to captains from the admin dashboard.
   const [teamId, setTeamId] = useState("");
+  const [role, setRole] = useState<"admin" | "player">("player");
   const [teams, setTeams] = useState<Array<{ _id: string; name: string }>>([]);
   const [loadingTeams, setLoadingTeams] = useState(false);
   const [passwordError, setPasswordError] = useState("");
@@ -100,6 +101,7 @@ const Auth = () => {
         email,
         password,
         name: email.split("@")[0],
+        role,
       });
       if (!ok) {
         toast({
@@ -204,21 +206,37 @@ const Auth = () => {
               )}
             </div>
             {/* Show OTP verify input after signup */}
-            {!isLogin && showOtp && (
-              <div className="space-y-2">
-                <Label htmlFor="otp">Verification Code</Label>
-                <Input
-                  id="otp"
-                  type="text"
-                  placeholder="Enter 6-digit code"
-                  value={otp}
-                  onChange={(e) => setOtp(e.target.value)}
-                />
-                <div className="text-sm text-gray-400">
-                  We sent a 6-digit code to your email. It expires in 10
-                  minutes.
+            {!isLogin && (
+              <>
+                <div className="space-y-2">
+                  <Label htmlFor="role">Role</Label>
+                  <select
+                    id="role"
+                    className="w-full bg-white border border-amber-500 text-black rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-amber-400 transition-colors"
+                    value={role}
+                    onChange={(e) => setRole(e.target.value as any)}
+                  >
+                    <option value="player">Player</option>
+                    <option value="admin">Admin</option>
+                  </select>
                 </div>
-              </div>
+                {showOtp && (
+                  <div className="space-y-2">
+                    <Label htmlFor="otp">Verification Code</Label>
+                    <Input
+                      id="otp"
+                      type="text"
+                      placeholder="Enter 6-digit code"
+                      value={otp}
+                      onChange={(e) => setOtp(e.target.value)}
+                    />
+                    <div className="text-sm text-gray-400">
+                      We sent a 6-digit code to your email. It expires in 10
+                      minutes.
+                    </div>
+                  </div>
+                )}
+              </>
             )}
             <Button
               type="submit"

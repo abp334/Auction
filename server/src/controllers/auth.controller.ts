@@ -14,11 +14,12 @@ import {
   compareRefreshToken,
 } from "../utils/auth.js";
 
-// Signup from public UI should only create 'player' accounts.
+// Signup allows 'admin' or 'player' roles from UI; captains must be promoted by admin.
 const signupSchema = Joi.object({
   email: Joi.string().email().required(),
   password: Joi.string().min(8).required(),
   name: Joi.string().min(2).required(),
+  role: Joi.string().valid("admin", "player").default("player"),
 });
 
 const verifyOtpSchema = Joi.object({
@@ -27,34 +28,35 @@ const verifyOtpSchema = Joi.object({
 });
 
 async function sendOtpEmail(email: string, otp: string) {
-  const host = process.env.SMTP_HOST;
-  const port = process.env.SMTP_PORT
-    ? Number(process.env.SMTP_PORT)
-    : undefined;
-  const user = process.env.SMTP_USER;
-  const pass = process.env.SMTP_PASS;
   const message = `Your verification code is ${otp}. It will expire in 10 minutes.`;
 
-  // If SMTP is configured, send email. Otherwise fallback to logging OTP.
-  if (host && user && pass) {
+  // Prefer EmailJS if configured
+  const emailJsService = process.env.EMAILJS_SERVICE_ID;
+  const emailJsTemplate = process.env.EMAILJS_TEMPLATE_ID;
+  const emailJsUser =
+    process.env.EMAILJS_USER_ID || process.env.EMAILJS_PUBLIC_KEY;
+
+  if (emailJsService && emailJsTemplate && emailJsUser) {
     try {
-      const nodemailer = await import("nodemailer");
-      const transporter = nodemailer.createTransport({
-        host,
-        port,
-        secure: !!process.env.SMTP_SECURE,
-        auth: { user, pass },
-      });
-      await transporter.sendMail({
-        from: process.env.SMTP_FROM || "no-reply@example.com",
-        to: email,
-        subject: "Your verification code",
-        text: message,
-        html: `<p>${message}</p>`,
+      const body = {
+        service_id: emailJsService,
+        template_id: emailJsTemplate,
+        user_id: emailJsUser,
+        template_params: {
+          to_email: email,
+          otp,
+          message,
+        },
+      };
+      await fetch("https://api.emailjs.com/api/v1.0/email/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
       });
       return;
     } catch (err) {
-      console.error("Failed to send OTP email via SMTP", err);
+      console.error("Failed to send OTP via EmailJS", err);
+      // fall through to logging
     }
   }
 
@@ -98,12 +100,11 @@ export async function signup(req: Request, res: Response) {
   const otpHash = await bcrypt.hash(otp, 10);
   const otpExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
-  // Enforce 'player' role for public signup
   const created = await User.create({
     email: value.email,
     passwordHash,
     name: value.name,
-    role: "player",
+    role: value.role || "player",
     emailVerified: false,
     otpHash,
     otpExpires,

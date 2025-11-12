@@ -16,6 +16,7 @@ type AuthContextValue = {
     email: string;
     password: string;
     name: string;
+    role?: "admin" | "player";
   }) => Promise<boolean>;
   verifySignupOtp: (email: string, otp: string) => Promise<boolean>;
   logout: () => Promise<void>;
@@ -43,6 +44,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     email: string;
     password: string;
     name: string;
+    role?: "admin" | "player";
   }) => {
     const res = await apiFetch("/auth/signup", {
       method: "POST",
