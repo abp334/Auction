@@ -56,11 +56,11 @@ io.on("connection", (socket) => {
   registerAuctionSocketHandlers(io, socket);
 });
 
-// Socket auth middleware - optionally attach user info when token provided.
+// Socket auth middleware - attach user info when token provided but allow anonymous connections.
 io.use(async (socket, next) => {
   try {
     const token = socket.handshake.auth?.token as string | undefined;
-    if (!token) return next(new Error("Authentication required"));
+    if (!token) return next(); // allow unauthenticated sockets (spectators)
     const payload = verifyAccessToken(token);
     // Attach minimal user info to socket.data
     socket.data.user = { id: payload.sub, role: payload.role };
@@ -71,7 +71,8 @@ io.use(async (socket, next) => {
     }
     return next();
   } catch (err) {
-    return next(new Error("Authentication error"));
+    // If token invalid, allow connection but without user data
+    return next();
   }
 });
 

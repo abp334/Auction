@@ -40,6 +40,7 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
   const [timeLeft, setTimeLeft] = useState(30);
   const [currentPlayer, setCurrentPlayer] = useState<Player | null>(null);
   const [teams, setTeams] = useState<Team[]>([]);
+  const [presentTeamIds, setPresentTeamIds] = useState<string[]>([]);
   const [commentary, setCommentary] = useState<string[]>([
     "Auction started! First player up for bidding.",
   ]);
@@ -180,6 +181,26 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
         setLastBidTeam(e.teamId);
         // Timer will be reset by server
       });
+      s.on(
+        "auction:presence",
+        (e: {
+          userId: string;
+          joined: boolean;
+          role?: string;
+          teamId?: string | null;
+        }) => {
+          // Only track captains' presence by teamId
+          if (!e.teamId) return;
+          if (e.role !== "captain") return;
+          setPresentTeamIds((prev) => {
+            const exists = prev.includes(e.teamId as string);
+            if (e.joined && !exists) return [...prev, e.teamId as string];
+            if (!e.joined && exists)
+              return prev.filter((id) => id !== e.teamId);
+            return prev;
+          });
+        }
+      );
       s.on(
         "auction:bid_undo",
         (e: {
@@ -884,39 +905,43 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
                   Teams
                 </h3>
                 <div className="space-y-3">
-                  {teams.map((team) => (
-                    <div
-                      key={team.id}
-                      className={`p-4 bg-[#1a2332]/60 backdrop-blur-sm rounded-lg border ${
-                        team.id === myTeamId
-                          ? "border-amber-500 bg-amber-500/10"
-                          : "border-white/10"
-                      } hover:bg-[#1a2332]/80 transition`}
-                    >
-                      <div className="flex items-center gap-3 mb-3">
-                        <span className="text-3xl">{team.logo}</span>
-                        <div className="flex-1">
-                          <p className="font-bold text-white text-lg">
-                            {team.name}
-                            {team.id === myTeamId && (
-                              <span className="text-amber-400 text-sm ml-2">
-                                (My Team)
-                              </span>
-                            )}
+                  {teams
+                    .filter((team) => presentTeamIds.includes(team.id))
+                    .map((team) => (
+                      <div
+                        key={team.id}
+                        className={`p-4 bg-[#1a2332]/60 backdrop-blur-sm rounded-lg border ${
+                          team.id === myTeamId
+                            ? "border-amber-500 bg-amber-500/10"
+                            : "border-white/10"
+                        } hover:bg-[#1a2332]/80 transition`}
+                      >
+                        <div className="flex items-center gap-3 mb-3">
+                          <span className="text-3xl">{team.logo}</span>
+                          <div className="flex-1">
+                            <p className="font-bold text-white text-lg">
+                              {team.name}
+                              {team.id === myTeamId && (
+                                <span className="text-amber-400 text-sm ml-2">
+                                  (My Team)
+                                </span>
+                              )}
+                            </p>
+                            <p className="text-sm text-gray-400">
+                              {team.captain}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="text-sm space-y-1 text-gray-300">
+                          <p className="text-amber-400 font-bold">
+                            Purse: ${team.purse.toLocaleString()}
                           </p>
-                          <p className="text-sm text-gray-400">
-                            {team.captain}
+                          <p className="text-white">
+                            Players: {team.players}/11
                           </p>
                         </div>
                       </div>
-                      <div className="text-sm space-y-1 text-gray-300">
-                        <p className="text-amber-400 font-bold">
-                          Purse: ${team.purse.toLocaleString()}
-                        </p>
-                        <p className="text-white">Players: {team.players}/11</p>
-                      </div>
-                    </div>
-                  ))}
+                    ))}
                 </div>
               </CardContent>
             </Card>

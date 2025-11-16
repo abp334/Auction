@@ -13,17 +13,29 @@ export function registerAuctionSocketHandlers(
 ): void {
   socket.on("auction:join", (roomCode: string) => {
     socket.join(roomCode);
+    const socketUser = (socket.data as any)?.user as
+      | { id: string; role: string }
+      | undefined;
+    const teamId = (socket.data as any)?.teamId;
     io.to(roomCode).emit("auction:presence", {
       userId: socket.id,
       joined: true,
+      role: socketUser?.role || "spectator",
+      teamId: teamId || null,
     });
   });
 
   socket.on("auction:leave", (roomCode: string) => {
     socket.leave(roomCode);
+    const socketUser = (socket.data as any)?.user as
+      | { id: string; role: string }
+      | undefined;
+    const teamId = (socket.data as any)?.teamId;
     io.to(roomCode).emit("auction:presence", {
       userId: socket.id,
       joined: false,
+      role: socketUser?.role || "spectator",
+      teamId: teamId || null,
     });
   });
 
