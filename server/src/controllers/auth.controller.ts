@@ -150,12 +150,6 @@ export async function login(req: Request, res: Response) {
     return res
       .status(StatusCodes.UNAUTHORIZED)
       .json({ error: "Invalid credentials" });
-  // Require email verification
-  if (!user.emailVerified) {
-    return res
-      .status(StatusCodes.FORBIDDEN)
-      .json({ error: "Email not verified. Please verify your email first." });
-  }
 
   const at = signAccessToken({ sub: user.id, role: user.role });
   const rt = signRefreshToken({ sub: user.id });
@@ -193,6 +187,32 @@ export async function me(
       role: user.role,
       teamId: user.teamId,
     },
+  });
+}
+
+// Dev helper: return user document by email (only in non-production)
+export async function debugUser(req: Request, res: Response) {
+  if (process.env.NODE_ENV === "production") {
+    return res
+      .status(StatusCodes.FORBIDDEN)
+      .json({ error: "Not allowed in production" });
+  }
+  const email = (req.query as any)?.email;
+  if (!email)
+    return res
+      .status(StatusCodes.BAD_REQUEST)
+      .json({ error: "email query required" });
+  const user = await User.findOne({ email }).lean();
+  if (!user)
+    return res.status(StatusCodes.NOT_FOUND).json({ error: "User not found" });
+  // Return key fields including hashed password for debugging
+  return res.status(StatusCodes.OK).json({
+    id: user._id,
+    email: user.email,
+    name: user.name,
+    role: user.role,
+    emailVerified: user.emailVerified,
+    passwordHash: user.passwordHash,
   });
 }
 
