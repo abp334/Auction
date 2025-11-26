@@ -38,6 +38,7 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
   const { toast } = useToast();
   const { user } = useAuth();
   const [timeLeft, setTimeLeft] = useState(30);
+  const [auctionEndTime, setAuctionEndTime] = useState<number | null>(null);
   const [currentPlayer, setCurrentPlayer] = useState<Player | null>(null);
   const [teams, setTeams] = useState<Team[]>([]);
   const [presentTeamIds, setPresentTeamIds] = useState<string[]>([]);
@@ -61,6 +62,7 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
   const timerTriggeredRef = useRef<boolean>(false);
   // Debounce bid requests to prevent rapid duplicates
   const bidTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const auctionEndTimeRef = useRef<number | null>(null);
 
   useEffect(() => {
     // Load auction by roomCode and bootstrap teams, current player
@@ -307,7 +309,19 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
           batsmanType: e.player.role || "",
           bowlerType: e.player.bowlerType || "Not a Bowler",
         });
-        setTimeLeft(30); // Will be updated by server timer broadcast
+        const targetEnd =
+          typeof e.remainingTime === "number"
+            ? Date.now() + e.remainingTime * 1000
+            : typeof e.timerEndTime === "number"
+            ? e.timerEndTime
+            : null;
+        auctionEndTimeRef.current = targetEnd;
+        setAuctionEndTime(targetEnd);
+        setTimeLeft(
+          targetEnd
+            ? Math.max(0, Math.floor((targetEnd - Date.now()) / 1000))
+            : 0
+        );
         setHasSkipped(false); // Reset skip state for new player
         // Clear auction currentBid when new player is set
         setAuction((prev: any) =>
@@ -377,20 +391,61 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
     teamsRef.current = teams;
   }, [teams]);
 
-  // Listen to server timer broadcasts instead of running local timer
+  // Keep end time ref in sync for interval reads
+  useEffect(() => {
+    auctionEndTimeRef.current = auctionEndTime;
+  }, [auctionEndTime]);
+
+  // Listen to server timer broadcasts using absolute target timestamps
   useEffect(() => {
     if (!socket) return;
 
-    const handleTimer = (e: { timeLeft: number; totalTime: number }) => {
-      setTimeLeft(e.timeLeft);
+    const handleTimer = (e: {
+      endTime?: number;
+      remainingTime?: number;
+      totalTime?: number;
+    }) => {
+      const targetEnd = e.endTime
+        ? e.endTime
+        : typeof e.remainingTime === "number"
+        ? Date.now() + e.remainingTime * 1000
+        : null;
+      auctionEndTimeRef.current = targetEnd;
+      setAuctionEndTime(targetEnd);
     };
 
     socket.on("auction:timer", handleTimer);
+    socket.on("auction:sync", handleTimer);
 
     return () => {
       socket.off("auction:timer", handleTimer);
+      socket.off("auction:sync", handleTimer);
     };
   }, [socket]);
+
+  // Local high-frequency countdown derived from target timestamp
+  useEffect(() => {
+    if (!auctionEndTimeRef.current) {
+      setTimeLeft(0);
+      return;
+    }
+
+    const interval = setInterval(() => {
+      const target = auctionEndTimeRef.current;
+      if (!target) {
+        setTimeLeft(0);
+        return;
+      }
+      const seconds = Math.max(0, Math.floor((target - Date.now()) / 1000));
+      setTimeLeft(seconds);
+      if (seconds === 0) {
+        auctionEndTimeRef.current = null;
+        setAuctionEndTime(null);
+      }
+    }, 500);
+
+    return () => clearInterval(interval);
+  }, [auctionEndTime]);
 
   const handleBid = async () => {
     // Use user.teamId as fallback if myTeamId is not set
