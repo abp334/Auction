@@ -6,7 +6,7 @@ import { ArrowLeft, Gavel, Clock, Trophy, User, Ban } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 import confetti from "canvas-confetti";
 import { io, Socket } from "socket.io-client";
-import { apiFetch, API_URL } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/hooks/use-auth";
 
 interface AuctionRoomProps {
@@ -37,8 +37,9 @@ interface Team {
 const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
   const { toast } = useToast();
   const { user } = useAuth();
+
+  // State
   const [timeLeft, setTimeLeft] = useState(30);
-  const [auctionEndTime, setAuctionEndTime] = useState<number | null>(null);
   const [currentPlayer, setCurrentPlayer] = useState<Player | null>(null);
   const [teams, setTeams] = useState<Team[]>([]);
   const [presentTeamIds, setPresentTeamIds] = useState<string[]>([]);
@@ -53,19 +54,21 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
   const [auctionId, setAuctionId] = useState<string | null>(null);
   const [auction, setAuction] = useState<any>(null);
   const [socket, setSocket] = useState<Socket | null>(null);
+
+  // Action States
   const [isBidding, setIsBidding] = useState(false);
   const [isSkipping, setIsSkipping] = useState(false);
   const [isUndoing, setIsUndoing] = useState(false);
-  // Use ref to keep teams accessible in socket handlers
+
+  // Refs for stability in callbacks/intervals
   const teamsRef = useRef<Team[]>([]);
-  // Use ref to prevent multiple timer triggers
-  const timerTriggeredRef = useRef<boolean>(false);
-  // Debounce bid requests to prevent rapid duplicates
   const bidTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // CRITICAL: Timer Refs to prevent re-render loops
   const auctionEndTimeRef = useRef<number | null>(null);
 
   useEffect(() => {
-    // Load auction by roomCode and bootstrap teams, current player
+    // Initial Data Load
     (async () => {
       const res = await apiFetch(
         `/auctions?roomCode=${encodeURIComponent(roomCode)}`
@@ -91,15 +94,14 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
           players: 0,
         }));
         setTeams(mappedTeams);
-        // Update ref so socket handlers can access latest teams
         teamsRef.current = mappedTeams;
+
         // Find captain's team
         if (role === "captain" && user?.teamId) {
           const myTeam = teams.find((t: any) => t._id === user.teamId);
           if (myTeam) {
             setMyTeamId(myTeam._id);
           } else {
-            // If team not found in list, still use user.teamId as fallback
             setMyTeamId(user.teamId);
           }
         }
@@ -142,16 +144,12 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
       }
     })();
 
-    // Connect socket and join room
-    // Socket.IO connects to backend server (not proxied API).
-    // Use VITE_SERVER_URL when provided, otherwise fall back to the current page origin
-    // so the hosted site connects to its own backend automatically.
+    // Socket Connection
     const backendUrl =
       import.meta.env.VITE_SERVER_URL ||
       (typeof window !== "undefined" && window.location.origin) ||
       "http://localhost:5001";
-    // Attach access token if available so the server can authenticate socket connections.
-    // We import getAccessToken dynamically to avoid circular import timing issues.
+
     let s: Socket | null = null;
     import("@/lib/api").then(({ getAccessToken }) => {
       const token = getAccessToken ? getAccessToken() : null;
@@ -160,12 +158,16 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
         transports: ["websocket", "polling"],
         auth: { token },
       });
+
       s.emit("auction:join", roomCode);
+
+      // --- SOCKET EVENT LISTENERS ---
+
       s.on("auction:bid_update", (e: any) => {
-        // Find team name from teams ref (always has latest teams)
         const team = teamsRef.current.find((t) => t.id === e.teamId);
         const teamName =
           team?.name || `Team ${e.teamId?.substring(0, 6) || "Unknown"}`;
+
         setCommentary((prev) =>
           [`Bid: $${e.amount.toLocaleString()} by ${teamName}`, ...prev].slice(
             0,
@@ -173,66 +175,62 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
           )
         );
         setCurrentPlayer((p) => (p ? { ...p, currentBid: e.amount } : null));
-        // Update auction state with current bid
         setAuction((prev: any) =>
           prev
             ? { ...prev, currentBid: { amount: e.amount, teamId: e.teamId } }
             : null
         );
-        // Update last bid team
         setLastBidTeam(e.teamId);
-        // Timer will be reset by server
+
+        // Optimistic Timer Extension on Bid (Server will confirm via auction:timer)
+        // Resetting to 30s locally to feel responsive immediately
+        const newTarget = Date.now() + 30000;
+        auctionEndTimeRef.current = newTarget;
       });
+
       s.on(
-        "auction:presence",
-        (e: {
-          userId: string;
-          joined: boolean;
-          role?: string;
-          teamId?: string | null;
-        }) => {
-          // Only track captains' presence by teamId
-          if (!e.teamId) return;
-          if (e.role !== "captain") return;
-          setPresentTeamIds((prev) => {
-            const exists = prev.includes(e.teamId as string);
-            if (e.joined && !exists) return [...prev, e.teamId as string];
-            if (!e.joined && exists)
-              return prev.filter((id) => id !== e.teamId);
-            return prev;
-          });
-        }
-      );
-      s.on(
-        "auction:bid_undo",
-        (e: {
-          teamId: string;
-          teamName: string;
-          currentBid?: { amount: number; teamId: string };
-        }) => {
-          setCommentary((prev) =>
-            [`${e.teamName} withdrew their bid.`, ...prev].slice(0, 10)
-          );
-          if (e.currentBid) {
-            setCurrentPlayer((p) =>
-              p ? { ...p, currentBid: e.currentBid!.amount } : null
-            );
-            setAuction((prev: any) =>
-              prev ? { ...prev, currentBid: e.currentBid } : null
-            );
-            setLastBidTeam(e.currentBid.teamId);
-          } else {
-            // No more bids - reset to base price (1000)
-            setCurrentPlayer((p) => (p ? { ...p, currentBid: 1000 } : null));
-            setAuction((prev: any) =>
-              prev ? { ...prev, currentBid: undefined } : null
-            );
-            setLastBidTeam(null);
+        "auction:timer",
+        (e: { endTime?: number; timeLeft?: number; totalTime?: number }) => {
+          // PREFERRED: Use absolute endTime from server
+          if (e.endTime) {
+            auctionEndTimeRef.current = e.endTime;
+          }
+          // FALLBACK: Calculate based on timeLeft
+          else if (typeof e.timeLeft === "number") {
+            auctionEndTimeRef.current = Date.now() + e.timeLeft * 1000;
           }
         }
       );
+
+      s.on("auction:player_changed", (e: any) => {
+        setCommentary((prev) =>
+          [`New player: ${e.player.name}`, ...prev].slice(0, 10)
+        );
+        setCurrentPlayer({
+          id: e.player.id,
+          name: e.player.name,
+          photo: e.player.photo || "",
+          currentBid: e.player.basePrice || 1000,
+          age: e.player.age || 25,
+          batsmanType: e.player.role || "",
+          bowlerType: e.player.bowlerType || "Not a Bowler",
+        });
+
+        setHasSkipped(false);
+        setAuction((prev: any) =>
+          prev ? { ...prev, currentBid: undefined } : null
+        );
+
+        // Sync Timer immediately
+        if (e.timerEndTime) {
+          auctionEndTimeRef.current = e.timerEndTime;
+        } else if (e.remainingTime) {
+          auctionEndTimeRef.current = Date.now() + e.remainingTime * 1000;
+        }
+      });
+
       s.on("auction:sale", async (e: any) => {
-        // First, refresh teams to get latest data
+        // Refresh teams
         const tRes = await apiFetch("/teams");
         if (tRes.ok) {
           const { teams: freshTeams } = await tRes.json();
@@ -247,27 +245,12 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
           setTeams(mappedTeams);
           teamsRef.current = mappedTeams;
 
-          // Use team name and player name from socket event (backend sends them)
           const teamName =
             e.teamName ||
             mappedTeams.find((t) => t.id === e.teamId)?.name ||
-            `Team ${e.teamId?.substring(0, 6) || "Unknown"}`;
+            "Unknown";
           const playerName = e.playerName || currentPlayer?.name || "Player";
 
-          setCommentary((prev) =>
-            [
-              `${playerName} goes to ${teamName} for $${e.price.toLocaleString()}`,
-              ...prev,
-            ].slice(0, 10)
-          );
-        } else {
-          // Fallback if teams fetch fails
-          const team = teamsRef.current.find((t) => t.id === e.teamId);
-          const teamName =
-            e.teamName ||
-            team?.name ||
-            `Team ${e.teamId?.substring(0, 6) || "Unknown"}`;
-          const playerName = e.playerName || currentPlayer?.name || "Player";
           setCommentary((prev) =>
             [
               `${playerName} goes to ${teamName} for $${e.price.toLocaleString()}`,
@@ -276,7 +259,6 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
           );
         }
 
-        // Refresh purchased players if it's my team
         if (e.teamId === myTeamId) {
           apiFetch(`/players?teamId=${myTeamId}`).then(async (res) => {
             if (res.ok) {
@@ -295,59 +277,65 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
             }
           });
         }
+
+        // Stop timer visual
+        auctionEndTimeRef.current = null;
+        setTimeLeft(0);
       });
-      s!.on("auction:player_changed", (e: any) => {
-        setCommentary((prev) =>
-          [`New player: ${e.player.name}`, ...prev].slice(0, 10)
-        );
-        setCurrentPlayer({
-          id: e.player.id,
-          name: e.player.name,
-          photo: e.player.photo || "",
-          currentBid: e.player.basePrice || 1000,
-          age: e.player.age || 25,
-          batsmanType: e.player.role || "",
-          bowlerType: e.player.bowlerType || "Not a Bowler",
+
+      s.on("auction:presence", (e: any) => {
+        if (!e.teamId || e.role !== "captain") return;
+        setPresentTeamIds((prev) => {
+          const exists = prev.includes(e.teamId);
+          if (e.joined && !exists) return [...prev, e.teamId];
+          if (!e.joined && exists) return prev.filter((id) => id !== e.teamId);
+          return prev;
         });
-        const targetEnd =
-          typeof e.remainingTime === "number"
-            ? Date.now() + e.remainingTime * 1000
-            : typeof e.timerEndTime === "number"
-            ? e.timerEndTime
-            : null;
-        auctionEndTimeRef.current = targetEnd;
-        setAuctionEndTime(targetEnd);
-        setTimeLeft(
-          targetEnd
-            ? Math.max(0, Math.floor((targetEnd - Date.now()) / 1000))
-            : 0
-        );
-        setHasSkipped(false); // Reset skip state for new player
-        // Clear auction currentBid when new player is set
-        setAuction((prev: any) =>
-          prev ? { ...prev, currentBid: undefined } : null
-        );
       });
-      s!.on("auction:skip", (e: { teamId: string; teamName: string }) => {
+
+      s.on("auction:bid_undo", (e: any) => {
+        setCommentary((prev) =>
+          [`${e.teamName} withdrew their bid.`, ...prev].slice(0, 10)
+        );
+        if (e.currentBid) {
+          setCurrentPlayer((p) =>
+            p ? { ...p, currentBid: e.currentBid.amount } : null
+          );
+          setAuction((prev: any) =>
+            prev ? { ...prev, currentBid: e.currentBid } : null
+          );
+          setLastBidTeam(e.currentBid.teamId);
+        } else {
+          setCurrentPlayer((p) => (p ? { ...p, currentBid: 1000 } : null));
+          setAuction((prev: any) =>
+            prev ? { ...prev, currentBid: undefined } : null
+          );
+          setLastBidTeam(null);
+        }
+      });
+
+      s.on("auction:skip", (e: any) => {
         setCommentary((prev) =>
           [`${e.teamName} skipped this player.`, ...prev].slice(0, 10)
         );
-        // If it's my team, mark as skipped
         if (e.teamId === myTeamId || e.teamId === user?.teamId) {
           setHasSkipped(true);
         }
       });
-      s!.on("auction:unsold", (e: { playerId: string; playerName: string }) => {
+
+      s.on("auction:unsold", (e: any) => {
         setCommentary((prev) =>
           [`${e.playerName} went unsold.`, ...prev].slice(0, 10)
         );
+        auctionEndTimeRef.current = null;
+        setTimeLeft(0);
       });
-      s!.on("auction:completed", (e: any) => {
+
+      s.on("auction:completed", (e: any) => {
         setCommentary((prev) =>
           [e.message || "Auction completed!", ...prev].slice(0, 10)
         );
         setCurrentPlayer(null);
-        // Update auction state to completed
         setAuction((prev: any) =>
           prev ? { ...prev, state: "completed" } : null
         );
@@ -356,7 +344,8 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
           description: "All players have been sold!",
         });
       });
-      s!.on("auction:ended", (e: { message: string; auctionId: string }) => {
+
+      s.on("auction:ended", (e: any) => {
         setCommentary((prev) =>
           [e.message || "Auction ended by admin", ...prev].slice(0, 10)
         );
@@ -364,17 +353,10 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
         setAuction((prev: any) =>
           prev ? { ...prev, state: "completed" } : null
         );
-        toast({
-          title: "Auction Ended",
-          description: "The auction has been ended by admin. Redirecting...",
-          variant: "destructive",
-        });
-        // Redirect to joining page after 2 seconds
-        setTimeout(() => {
-          onExit();
-        }, 2000);
+        setTimeout(() => onExit(), 2000);
       });
-      setSocket(s!);
+
+      setSocket(s);
     });
 
     return () => {
@@ -383,72 +365,37 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
         s.disconnect();
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roomCode, role, user, myTeamId]);
 
-  // Update ref whenever teams change
+  // Keep ref in sync
   useEffect(() => {
     teamsRef.current = teams;
   }, [teams]);
 
-  // Keep end time ref in sync for interval reads
+  // --- LOCAL TIMER INTERVAL ---
+  // This runs independently of server ticks. It just looks at the Target Time.
   useEffect(() => {
-    auctionEndTimeRef.current = auctionEndTime;
-  }, [auctionEndTime]);
-
-  // Listen to server timer broadcasts using absolute target timestamps
-  useEffect(() => {
-    if (!socket) return;
-
-    const handleTimer = (e: {
-      endTime?: number;
-      remainingTime?: number;
-      totalTime?: number;
-    }) => {
-      const targetEnd = e.endTime
-        ? e.endTime
-        : typeof e.remainingTime === "number"
-        ? Date.now() + e.remainingTime * 1000
-        : null;
-      auctionEndTimeRef.current = targetEnd;
-      setAuctionEndTime(targetEnd);
-    };
-
-    socket.on("auction:timer", handleTimer);
-    socket.on("auction:sync", handleTimer);
-
-    return () => {
-      socket.off("auction:timer", handleTimer);
-      socket.off("auction:sync", handleTimer);
-    };
-  }, [socket]);
-
-  // Local high-frequency countdown derived from target timestamp
-  useEffect(() => {
-    if (!auctionEndTimeRef.current) {
-      setTimeLeft(0);
-      return;
-    }
-
     const interval = setInterval(() => {
       const target = auctionEndTimeRef.current;
+
       if (!target) {
         setTimeLeft(0);
         return;
       }
-      const seconds = Math.max(0, Math.floor((target - Date.now()) / 1000));
+
+      const diff = target - Date.now();
+      const seconds = Math.max(0, Math.floor(diff / 1000));
+
       setTimeLeft(seconds);
-      if (seconds === 0) {
-        auctionEndTimeRef.current = null;
-        setAuctionEndTime(null);
-      }
-    }, 500);
+
+      // If time is up locally, we wait for server to send 'sold' or 'unsold'
+      // We don't trigger logic here to avoid race conditions
+    }, 200); // Check 5 times a second for smoothness
 
     return () => clearInterval(interval);
-  }, [auctionEndTime]);
+  }, []);
 
   const handleBid = async () => {
-    // Use user.teamId as fallback if myTeamId is not set
     const teamId = myTeamId || user?.teamId;
     if (!auctionId || !currentPlayer || !teamId) {
       toast({
@@ -458,25 +405,19 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
       });
       return;
     }
-
-    // Prevent multiple simultaneous bids
     if (isBidding) return;
-
-    // Debounce rapid clicks (prevent duplicate bids)
-    if (bidTimeoutRef.current) {
-      return; // Already processing a bid
-    }
+    if (bidTimeoutRef.current) return;
 
     setIsBidding(true);
     bidTimeoutRef.current = setTimeout(() => {
       bidTimeoutRef.current = null;
-    }, 1000); // 1 second debounce
+    }, 1000);
 
     const newBid = Math.max(1000, (currentPlayer.currentBid || 1000) + 1000);
-
-    // Optimistic UI update - update immediately before server confirms
     const optimisticBid = newBid;
     const optimisticTeamId = teamId;
+
+    // Optimistic Updates
     setCurrentPlayer((p) => (p ? { ...p, currentBid: optimisticBid } : null));
     setAuction((prev: any) =>
       prev
@@ -488,7 +429,6 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
     );
     setLastBidTeam(optimisticTeamId);
 
-    // Update commentary optimistically
     const teamName =
       teamsRef.current.find((t) => t.id === optimisticTeamId)?.name ||
       "Your team";
@@ -499,8 +439,10 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
       )
     );
 
+    // Optimistically extend timer to 30s
+    auctionEndTimeRef.current = Date.now() + 30000;
+
     try {
-      // Emit bid over socket for low-latency path; fallback to HTTP if socket unavailable
       if (socket) {
         socket.emit("auction:bid", {
           auctionId,
@@ -514,56 +456,28 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
           description: `$${newBid.toLocaleString()}`,
         });
       } else {
+        // Fallback HTTP
         const res = await apiFetch(`/auctions/${auctionId}/bid`, {
           method: "POST",
           body: JSON.stringify({
             amount: newBid,
-            teamId: teamId,
+            teamId,
             playerId: currentPlayer.id,
           }),
         });
-        if (!res.ok) {
-          // Revert optimistic update on error
-          const { error } = await res
-            .json()
-            .catch(() => ({ error: "Bid failed" }));
-
-          // Revert to previous bid
-          const previousBid =
-            auction?.currentBid?.amount ||
-            currentPlayer.currentBid - 1000 ||
-            1000;
-          setCurrentPlayer((p) =>
-            p ? { ...p, currentBid: previousBid } : null
-          );
-          setAuction((prev: any) =>
-            prev ? { ...prev, currentBid: auction?.currentBid } : null
-          );
-
-          toast({
-            title: "Bid failed",
-            description: error,
-            variant: "destructive",
-          });
-        } else {
-          toast({
-            title: "Bid Placed",
-            description: `$${newBid.toLocaleString()}`,
-          });
-        }
+        if (!res.ok) throw new Error("Bid failed");
       }
     } catch (err) {
-      // Revert optimistic update on error
+      // Revert Optimistic
       const previousBid =
         auction?.currentBid?.amount || currentPlayer.currentBid - 1000 || 1000;
       setCurrentPlayer((p) => (p ? { ...p, currentBid: previousBid } : null));
       setAuction((prev: any) =>
         prev ? { ...prev, currentBid: auction?.currentBid } : null
       );
-
       toast({
         title: "Bid failed",
-        description: "Network error. Please try again.",
+        description: "Network error",
         variant: "destructive",
       });
     } finally {
@@ -576,200 +490,62 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
   };
 
   const handleSkip = async () => {
-    if (!auctionId) return;
-    if (isSkipping) return; // Prevent multiple simultaneous skips
+    if (!auctionId || isSkipping) return;
     setIsSkipping(true);
-
-    // Optimistic UI update
     setHasSkipped(true);
-    const teamName =
-      teamsRef.current.find((t) => t.id === myTeamId || t.id === user?.teamId)
-        ?.name || "Your team";
-    setCommentary((prev) =>
-      [`${teamName} skipped this player.`, ...prev].slice(0, 10)
-    );
 
     try {
       const res = await apiFetch(`/auctions/${auctionId}/skip`, {
         method: "POST",
       });
       if (res.ok) {
-        toast({
-          title: "Player Skipped",
-          description: "You've opted out of this player",
-        });
+        toast({ title: "Player Skipped", description: "You've opted out" });
       } else {
-        // Revert optimistic update on error
         setHasSkipped(false);
-        const data = await res.json();
-        toast({
-          title: "Error",
-          description: data.error || "Failed to skip player",
-          variant: "destructive",
-        });
       }
     } catch (err) {
-      // Revert optimistic update on error
       setHasSkipped(false);
-      console.error("Failed to skip player:", err);
-      toast({
-        title: "Error",
-        description: "Failed to skip player",
-        variant: "destructive",
-      });
     } finally {
       setIsSkipping(false);
     }
   };
 
   const handleUndo = async () => {
-    if (!auctionId) return;
-    if (isUndoing) return; // Prevent multiple simultaneous undos
+    if (!auctionId || isUndoing) return;
     setIsUndoing(true);
-
-    // Check if last bid is from my team
     const teamId = myTeamId || user?.teamId;
+
     if (!teamId || lastBidTeam !== teamId) {
       toast({
         title: "Cannot Undo",
-        description: "You can only undo your own bids",
+        description: "Not your bid",
         variant: "destructive",
       });
       setIsUndoing(false);
       return;
     }
 
-    // Optimistic UI update - revert to previous bid
-    const previousBid = Math.max(
-      1000,
-      (currentPlayer?.currentBid || 1000) - 1000
-    );
-    const previousBidState = auction?.currentBid;
-    setCurrentPlayer((p) => (p ? { ...p, currentBid: previousBid } : null));
-    setAuction((prev: any) =>
-      prev ? { ...prev, currentBid: previousBidState } : null
-    );
-    setLastBidTeam(null);
-
     try {
       const res = await apiFetch(`/auctions/${auctionId}/undo-bid`, {
         method: "POST",
       });
       if (res.ok) {
-        toast({
-          title: "Bid Undone",
-          description: "Your last bid was withdrawn",
-        });
-      } else {
-        // Revert optimistic update on error
-        setCurrentPlayer((p) =>
-          p ? { ...p, currentBid: currentPlayer?.currentBid || 1000 } : null
-        );
-        setAuction((prev: any) =>
-          prev ? { ...prev, currentBid: auction?.currentBid } : null
-        );
-        setLastBidTeam(teamId);
-
-        const data = await res.json();
-        toast({
-          title: "Error",
-          description: data.error || "Failed to undo bid",
-          variant: "destructive",
-        });
+        toast({ title: "Bid Undone", description: "Bid withdrawn" });
       }
     } catch (err) {
-      // Revert optimistic update on error
-      setCurrentPlayer((p) =>
-        p ? { ...p, currentBid: currentPlayer?.currentBid || 1000 } : null
-      );
-      setAuction((prev: any) =>
-        prev ? { ...prev, currentBid: auction?.currentBid } : null
-      );
-      setLastBidTeam(teamId);
-
-      console.error("Failed to undo bid:", err);
-      toast({
-        title: "Error",
-        description: "Failed to undo bid",
-        variant: "destructive",
-      });
+      console.error(err);
     } finally {
       setIsUndoing(false);
     }
   };
 
-  const handlePlayerSold = async () => {
-    // Trigger sell-current via API (admin would call this in real flow)
-    if (auctionId) {
-      await apiFetch(`/auctions/${auctionId}/sell-current`, { method: "POST" });
-    }
-    const winningTeam =
-      teams[Math.floor(Math.random() * teams.length)] ||
-      ({ name: "Team" } as any);
-
-    setShowCelebration(true);
-    setHasSkipped(false);
-
-    // Confetti animation
-    const duration = 3000;
-    const animationEnd = Date.now() + duration;
-    const defaults = { startVelocity: 30, spread: 360, ticks: 60, zIndex: 0 };
-
-    const randomInRange = (min: number, max: number) => {
-      return Math.random() * (max - min) + min;
-    };
-
-    const interval = setInterval(() => {
-      const timeLeft = animationEnd - Date.now();
-
-      if (timeLeft <= 0) {
-        return clearInterval(interval);
-      }
-
-      const particleCount = 50 * (timeLeft / duration);
-
-      confetti({
-        ...defaults,
-        particleCount,
-        origin: { x: randomInRange(0.1, 0.3), y: Math.random() - 0.2 },
-      });
-      confetti({
-        ...defaults,
-        particleCount,
-        origin: { x: randomInRange(0.7, 0.9), y: Math.random() - 0.2 },
-      });
-    }, 250);
-
-    setCommentary((prev) => [
-      `🎉 ${currentPlayer?.name || "Player"} SOLD to ${
-        winningTeam.name
-      } for $${(currentPlayer?.currentBid || 0).toLocaleString()}!`,
-      ...prev.slice(0, 4),
-    ]);
-
-    toast({
-      title: "Player Sold!",
-      description: `${currentPlayer?.name || "Player"} goes to ${
-        winningTeam.name
-      }`,
-    });
-
-    setTimeout(() => {
-      setShowCelebration(false);
-      // Clear current player (admin will set next via API)
-      setCurrentPlayer(null);
-    }, 3000);
-  };
-
   return (
     <div className="min-h-screen bg-gradient-to-br from-[#1a2332] to-[#0f1419] text-white">
-      {/* Header */}
       <header className="border-b border-amber-500/30 bg-[#0f1419]/80 backdrop-blur-sm">
         <div className="container mx-auto px-4 py-4 flex items-center justify-between">
           <div className="flex items-center gap-4">
             <Button variant="secondary" size="sm" onClick={onExit}>
-              <ArrowLeft className="w-4 h-4 mr-2" />
-              Exit
+              <ArrowLeft className="w-4 h-4 mr-2" /> Exit
             </Button>
             <div>
               <p className="text-sm text-amber-400/75">Room Code</p>
@@ -787,10 +563,8 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
         </div>
       </header>
 
-      {/* Main Auction Area */}
       <main className="container mx-auto px-4 py-6">
         <div className="grid lg:grid-cols-[1fr,350px] gap-6">
-          {/* Center - Player Card */}
           <div className="flex flex-col gap-4">
             <Card
               className={`border-4 bg-[#0f1419] ${
@@ -810,7 +584,7 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
                             Auction Ended
                           </h2>
                           <p className="text-white/70 text-lg">
-                            All players have been sold!
+                            All players sold!
                           </p>
                         </div>
                       </>
@@ -821,10 +595,6 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
                           <h2 className="text-3xl font-bold mb-2 text-white">
                             Selecting Next Player...
                           </h2>
-                          <p className="text-white/70 text-lg">
-                            The system is automatically selecting the next
-                            player...
-                          </p>
                         </div>
                       </>
                     )}
@@ -837,7 +607,7 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
                         You Skipped This Player
                       </h2>
                       <p className="text-white/70 text-lg">
-                        Waiting for other teams to bid...
+                        Waiting for bids...
                       </p>
                     </div>
                   </div>
@@ -899,18 +669,18 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
                             size="lg"
                             onClick={handleBid}
                             disabled={isBidding}
-                            className="bg-green-600 hover:bg-green-700 text-white text-lg h-14 font-bold disabled:opacity-50 disabled:cursor-not-allowed"
+                            className="bg-green-600 hover:bg-green-700 text-white text-lg h-14 font-bold disabled:opacity-50"
                           >
-                            <Gavel className="w-5 h-5 mr-2" />
-                            {isBidding ? "Placing..." : "Bid"}
+                            <Gavel className="w-5 h-5 mr-2" />{" "}
+                            {isBidding ? "..." : "Bid"}
                           </Button>
                           <Button
                             size="lg"
                             onClick={handleSkip}
                             disabled={isSkipping}
-                            className="bg-amber-600 hover:bg-amber-700 text-white h-14 font-bold border-2 border-amber-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                            className="bg-amber-600 hover:bg-amber-700 text-white h-14 font-bold border-2 border-amber-500 disabled:opacity-50"
                           >
-                            {isSkipping ? "Skipping..." : "Skip"}
+                            {isSkipping ? "..." : "Skip"}
                           </Button>
                           <Button
                             size="lg"
@@ -921,9 +691,9 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
                               !lastBidTeam ||
                               lastBidTeam !== (myTeamId || user?.teamId)
                             }
-                            className="h-14 font-bold disabled:opacity-50 disabled:cursor-not-allowed"
+                            className="h-14 font-bold disabled:opacity-50"
                           >
-                            {isUndoing ? "Undoing..." : "Undo"}
+                            {isUndoing ? "..." : "Undo"}
                           </Button>
                         </div>
                       )}
@@ -933,16 +703,14 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
               </CardContent>
             </Card>
 
-            {/* Commentary */}
             <Card className="border-amber-500/50 bg-[#0f1419]">
               <CardContent className="p-4">
                 <h3 className="font-bold mb-2 flex items-center gap-2 text-white">
-                  <Trophy className="w-4 h-4 text-amber-400" />
-                  Live Commentary
+                  <Trophy className="w-4 h-4 text-amber-400" /> Live Commentary
                 </h3>
                 <div className="space-y-1 text-sm max-h-32 overflow-y-auto">
                   {commentary.map((comment, i) => (
-                    <p key={i} className="text-white/90 slide-in">
+                    <p key={i} className="text-white/90">
                       {comment}
                     </p>
                   ))}
@@ -951,13 +719,11 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
             </Card>
           </div>
 
-          {/* Right Sidebar - Teams */}
           <div className="space-y-4">
             <Card className="border-amber-500/50 bg-[#0f1419]">
               <CardContent className="p-4">
                 <h3 className="font-bold mb-4 flex items-center gap-2 text-white">
-                  <Trophy className="w-5 h-5 text-amber-400" />
-                  Teams
+                  <Trophy className="w-5 h-5 text-amber-400" /> Teams
                 </h3>
                 <div className="space-y-3">
                   {teams
@@ -1004,13 +770,13 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
             <Card className="border-amber-500/50 bg-[#0f1419]">
               <CardContent className="p-4">
                 <h3 className="font-bold mb-4 flex items-center gap-2 text-white">
-                  <User className="w-5 h-5 text-amber-400" />
+                  <User className="w-5 h-5 text-amber-400" />{" "}
                   {teams.find((t) => t.id === myTeamId)?.name || "My Team"} -
-                  Purchased Players
+                  Players
                 </h3>
                 {myTeamPlayers.length === 0 ? (
                   <div className="text-center py-8 text-gray-400">
-                    <p className="text-sm">No players purchased yet</p>
+                    <p className="text-sm">No players yet</p>
                   </div>
                 ) : (
                   <div className="space-y-3 max-h-[400px] overflow-y-auto">
