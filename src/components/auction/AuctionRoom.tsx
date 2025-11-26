@@ -390,7 +390,7 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
 
       // If time is up locally, we wait for server to send 'sold' or 'unsold'
       // We don't trigger logic here to avoid race conditions
-    }, 200); // Check 5 times a second for smoothness
+    }, 100); // Check 5 times a second for smoothness
 
     return () => clearInterval(interval);
   }, []);
