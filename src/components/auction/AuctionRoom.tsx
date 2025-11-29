@@ -354,7 +354,8 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
 
   // Handlers
   const handleBid = async () => {
-    if (!auctionId || !currentPlayer || isBidding) return;
+    // FIX: Add !myTeamId to the guard clause to prevent silent failure
+    if (!auctionId || !currentPlayer || isBidding || !myTeamId) return;
     setIsBidding(true);
 
     const newBid = (currentPlayer.currentBid || 0) + 1000;
@@ -553,7 +554,13 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
                           <Button
                             size="lg"
                             onClick={handleBid}
-                            disabled={isBidding || timeLeft === 0}
+                            // FIX: Disable button if myTeamId or currentPlayer is missing
+                            disabled={
+                              isBidding ||
+                              timeLeft === 0 ||
+                              !myTeamId ||
+                              !currentPlayer
+                            }
                             className="bg-green-600 hover:bg-green-700 h-14 text-lg font-bold"
                           >
                             <Gavel className="w-5 h-5 mr-2" />{" "}
