@@ -323,8 +323,6 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
 
     const newBid = (currentPlayer.currentBid || 0) + 1000;
 
-    setCurrentPlayer((p) => (p ? { ...p, currentBid: newBid } : null));
-
     try {
       if (socketRef.current) {
         socketRef.current.emit("auction:bid", {
