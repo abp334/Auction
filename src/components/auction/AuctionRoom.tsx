@@ -354,45 +354,36 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
 
   // Handlers
   const handleBid = async () => {
-    // FIX: Add !myTeamId to the guard clause to prevent silent failure
+    // 1. Guard clause: Ensure we have all necessary data
     if (!auctionId || !currentPlayer || isBidding || !myTeamId) return;
-    setIsBidding(true);
 
+    setIsBidding(true);
     const newBid = (currentPlayer.currentBid || 0) + 1000;
 
-    // NO OPTIMISTIC UPDATE: Rely solely on the server's broadcast
-
     try {
-      if (socketRef.current) {
-        socketRef.current.emit("auction:bid", {
-          auctionId,
-          roomCode,
-          amount: newBid,
-          teamId: myTeamId,
-          playerId: currentPlayer.id,
-        });
-      } else {
-        // Fallback to REST API if socket isn't ready
-        await apiFetch(`/auctions/${auctionId}/bid`, {
-          method: "POST",
-          body: JSON.stringify({ amount: newBid, teamId: myTeamId }),
-        });
-      }
+      // 2. CHANGE: Always use REST API for bidding.
+      // This ensures the auth token is refreshed automatically via apiFetch if it expired.
+      // The socket.emit method does not handle 401/refresh logic, which is why your bids were failing silently.
+      await apiFetch(`/auctions/${auctionId}/bid`, {
+        method: "POST",
+        body: JSON.stringify({ amount: newBid, teamId: myTeamId }),
+      });
+
+      // Note: We do NOT need to manually update state here.
+      // The server will process the POST request and emit 'auction:bid_update' via Socket.IO.
+      // Your useEffect listener will catch that and update the UI for everyone simultaneously.
     } catch (e) {
       console.error("Bid error", e);
-      // On failure, sync latest state
-      await fetchLatestAuctionState();
       toast({
         title: "Bid Failed",
-        description: "Your bid could not be processed. Retrying sync.",
+        description: "Could not place bid. Please check your connection.",
         variant: "destructive",
       });
+      await fetchLatestAuctionState();
     } finally {
-      // Small timeout to prevent button spamming
       setTimeout(() => setIsBidding(false), 500);
     }
   };
-
   const handleSkip = async () => {
     if (!auctionId || isSkipping) return;
     setIsSkipping(true);

@@ -75,13 +75,15 @@ const loginSchema = Joi.object({
 });
 
 function setRefreshCookie(res: Response, token: string) {
-  // Cross-origin between different localhost ports needs SameSite=None + Secure
-  // Modern browsers treat localhost as secure context; use Secure always.
-  const isProd = process.env.NODE_ENV === "production";
+  // Determine if we are in production based on NODE_ENV or if we are cross-origin
+  const isProduction = process.env.NODE_ENV === "production";
+
   res.cookie("rt", token, {
     httpOnly: true,
-    secure: isProd ? true : false,
-    sameSite: isProd ? "none" : "lax",
+    // Always use secure in production, or if we are explicitly not on localhost
+    secure: isProduction,
+    // essential for cross-site (Vercel -> Render) cookies
+    sameSite: isProduction ? "none" : "lax",
     path: "/api/v1/auth",
     maxAge: 7 * 24 * 60 * 60 * 1000,
   });

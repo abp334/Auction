@@ -31,6 +31,14 @@ export function registerAuctionSocketHandlers(
     const socketUser = (socket.data as any)?.user as
       | { id: string; role: string }
       | undefined;
+
+    if (!socketUser) {
+      // ADD THIS: Emit error back to client instead of silent failure
+      socket.emit("error", {
+        message: "Unauthorized: You must be logged in to bid.",
+      });
+      return;
+    }
     const teamId = (socket.data as any)?.teamId;
     io.to(roomCode).emit("auction:presence", {
       userId: socket.id,
