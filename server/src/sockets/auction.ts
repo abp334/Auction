@@ -12,6 +12,7 @@ export function registerAuctionSocketHandlers(
   socket: Socket
 ): void {
   socket.on("auction:join", (roomCode: string) => {
+    // console.log(`Socket ${socket.id} joining room ${roomCode}`);
     socket.join(roomCode);
     const socketUser = (socket.data as any)?.user as
       | { id: string; role: string }
@@ -58,14 +59,12 @@ export function registerAuctionSocketHandlers(
           | { id: string; role: string }
           | undefined;
         if (!socketUser) {
-          // reject unauthenticated bidders
           return;
         }
 
         // If user is captain, ensure they belong to the team they're bidding for.
         if (socketUser.role === "captain") {
           const socketTeamId = (socket.data as any)?.teamId;
-          // If teamId wasn't loaded on connect, fetch it now
           let captainTeamId = socketTeamId;
           if (!captainTeamId) {
             const dbUser = await User.findById(socketUser.id)
@@ -75,7 +74,6 @@ export function registerAuctionSocketHandlers(
             (socket.data as any).teamId = captainTeamId;
           }
           if (!captainTeamId || captainTeamId !== teamId) {
-            // Captains can only bid for their own team
             return;
           }
         }
@@ -83,7 +81,6 @@ export function registerAuctionSocketHandlers(
         const dedupeKey = `sockbid:${auctionId}:${teamId}`;
         const now = Date.now();
         const last = pendingSocketBids.get(dedupeKey) || 0;
-        // simple 300ms throttle per team
         if (now - last < 300) return;
         pendingSocketBids.set(dedupeKey, now);
 
@@ -97,17 +94,15 @@ export function registerAuctionSocketHandlers(
         if (!auction || auction.state !== "active") return;
         if (!team) return;
 
-        // Minimum bid
         const minBid = 1000;
         if (amount < minBid) return;
 
-        // Check current bid and ensure incoming bid is higher
+        // Check current bid locally (fast fail)
         if (auction.currentBid && amount <= auction.currentBid.amount) return;
 
         // Budget enforcement
         if (team.wallet < amount) return;
 
-        // If playerId provided, ensure it matches current
         if (
           auction.currentPlayerId &&
           playerId &&
@@ -123,21 +118,28 @@ export function registerAuctionSocketHandlers(
         };
 
         // Atomic update
-        const updated = await Auction.findByIdAndUpdate(
-          auctionId,
+        const updated = await Auction.findOneAndUpdate(
+          {
+            _id: auctionId,
+            $or: [
+              { currentBid: { $exists: false } },
+              { "currentBid.amount": { $lt: amount } },
+            ],
+          },
           {
             $set: { currentBid: bid, skippedTeams: [] },
             $push: { bidHistory: bid },
           },
           { new: true }
         );
+
         if (!updated) return;
 
         // Reset timer (non-blocking)
         resetAuctionTimer(auctionId, updated.roomCode).catch(console.error);
 
-        // Broadcast bid update
-        io.to(roomCode).emit("auction:bid_update", {
+        // BROADCAST FIX: Use the roomCode from the DB (updated.roomCode), not the client payload
+        io.to(updated.roomCode).emit("auction:bid_update", {
           amount: bid.amount,
           teamId: bid.teamId,
           playerId: bid.playerId,
@@ -146,7 +148,6 @@ export function registerAuctionSocketHandlers(
       } catch (err) {
         console.error("Socket bid error:", err);
       } finally {
-        // cleanup dedupe after short window
         setTimeout(() => {
           pendingSocketBids.delete(
             `sockbid:${payload.auctionId}:${payload.teamId}`

@@ -18,13 +18,12 @@ const app: Application = express();
 const server = http.createServer(app);
 const io = new SocketIOServer(server, {
   cors: createCorsOptions(),
-  transports: ["websocket", "polling"], // Support both for better compatibility
-  pingTimeout: 60000, // 60 seconds
-  pingInterval: 25000, // 25 seconds
-  maxHttpBufferSize: 1e6, // 1MB limit
-  allowEIO3: true, // Backward compatibility
-  connectTimeout: 45000, // 45 seconds
-  upgradeTimeout: 10000, // 10 seconds
+  transports: ["websocket", "polling"],
+  pingTimeout: 60000,
+  pingInterval: 25000,
+  maxHttpBufferSize: 1e6,
+  allowEIO3: true,
+  connectTimeout: 45000,
   // Enable compression for better performance
   perMessageDeflate: {
     threshold: 1024, // Only compress messages larger than 1KB
@@ -51,29 +50,36 @@ app.use("/api", apiRouter);
 app.use(notFound);
 app.use(errorHandler);
 
-// Socket handlers
-io.on("connection", (socket) => {
-  registerAuctionSocketHandlers(io, socket);
-});
-
-// Socket auth middleware - attach user info when token provided but allow anonymous connections.
+// --- CRITICAL FIX: Auth Middleware MUST be before connection handler ---
 io.use(async (socket, next) => {
   try {
-    const token = socket.handshake.auth?.token as string | undefined;
+    const _token = socket.handshake.auth?.token as string | undefined;
+    // Also check handshake query for token (common fallback)
+    const token = _token || (socket.handshake.query?.token as string);
+
     if (!token) return next(); // allow unauthenticated sockets (spectators)
+
     const payload = verifyAccessToken(token);
     // Attach minimal user info to socket.data
     socket.data.user = { id: payload.sub, role: payload.role };
+
     // Load teamId for captains (cached on socket)
     const dbUser = await User.findById(payload.sub).select("teamId").lean();
     if (dbUser) {
       (socket.data as any).teamId = dbUser.teamId;
     }
     return next();
-  } catch (err) {
-    // If token invalid, allow connection but without user data
+  } catch (err: any) {
+    // If token invalid, allow connection but without user data (spectator)
+    console.warn("Socket auth failed, proceeding as spectator:", err.message);
     return next();
   }
+});
+
+// Socket handlers
+io.on("connection", (socket) => {
+  // console.log(`Socket connected: ${socket.id} | Role: ${(socket.data as any).user?.role || 'guest'}`);
+  registerAuctionSocketHandlers(io, socket);
 });
 
 const PORT = process.env.PORT ? Number(process.env.PORT) : 5000;

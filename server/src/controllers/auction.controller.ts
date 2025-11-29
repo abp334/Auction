@@ -1,5 +1,5 @@
-import { StatusCodes } from "http-status-codes";
 import type { Request, Response } from "express";
+import { StatusCodes } from "http-status-codes";
 import Joi from "joi";
 import mongoose from "mongoose";
 import { nanoid } from "nanoid";
@@ -24,11 +24,13 @@ const createSchema = Joi.object({
 export async function listAuctions(req: Request, res: Response) {
   const { roomCode } = req.query as { roomCode?: string };
   const filter = roomCode ? { roomCode } : {};
-  // Optimize query - only fetch essential fields
+  // OPTIMIZATION: Fetch timer fields so client clock starts immediately
   const auctions = await Auction.find(filter)
-    .select("name roomCode state currentPlayerId currentBid createdAt")
+    .select(
+      "name roomCode state currentPlayerId currentBid createdAt timerEndsAt timerDuration"
+    )
     .sort({ createdAt: -1 })
-    .lean(); // Use lean() for faster queries when not modifying documents
+    .lean();
   return res.status(StatusCodes.OK).json({ auctions });
 }
 
@@ -40,7 +42,6 @@ export async function createAuction(
   if (error)
     return res.status(StatusCodes.BAD_REQUEST).json({ error: error.message });
 
-  // Generate 6-character uppercase alphanumeric room code (A-Z, 0-9 only)
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
   let roomCode = "";
   for (let i = 0; i < 6; i++) {
@@ -70,7 +71,7 @@ export async function startAuction(req: Request, res: Response) {
   const { id } = req.params;
   const auction = await Auction.findByIdAndUpdate(
     id,
-    { state: "active", unsoldPlayers: [] }, // Reset unsold players for new auction
+    { state: "active", unsoldPlayers: [] },
     { new: true }
   );
   if (!auction)
@@ -78,13 +79,11 @@ export async function startAuction(req: Request, res: Response) {
       .status(StatusCodes.NOT_FOUND)
       .json({ error: "Auction not found" });
 
-  // Initialize an in-memory player queue and pick the first player from it.
   try {
     await initAuctionQueue(id);
     const queue =
       (await import("../utils/timer.js")).auctionPlayerQueues.get(id) || [];
     const nextPlayerId = queue.shift();
-    // Persist modified queue
     (await import("../utils/timer.js")).auctionPlayerQueues.set(id, queue);
 
     if (nextPlayerId) {
@@ -93,10 +92,8 @@ export async function startAuction(req: Request, res: Response) {
       auction.skippedTeams = [];
       await auction.save();
 
-      // Start timer for first player
       await startAuctionTimer(id, auction.roomCode);
 
-      // Broadcast to all clients
       try {
         const p = await Player.findById(nextPlayerId).select(
           "_id name photo age role bowlerType basePrice"
@@ -117,10 +114,6 @@ export async function startAuction(req: Request, res: Response) {
       } catch (err) {
         console.error("Error broadcasting player_changed:", err);
       }
-    } else {
-      console.log(
-        "No unsold players found when starting auction (queue empty)"
-      );
     }
   } catch (err) {
     console.error("Failed to initialize auction queue:", err);
@@ -141,7 +134,6 @@ export async function pauseAuction(req: Request, res: Response) {
       .status(StatusCodes.NOT_FOUND)
       .json({ error: "Auction not found" });
 
-  // Stop timer when paused
   stopAuctionTimer(id);
 
   return res.status(StatusCodes.OK).json({ auction });
@@ -159,22 +151,17 @@ export async function resumeAuction(req: Request, res: Response) {
       .status(StatusCodes.NOT_FOUND)
       .json({ error: "Auction not found" });
 
-  // Resume timer if there's a current player, otherwise select next player
   if (auction.currentPlayerId) {
     await startAuctionTimer(id, auction.roomCode);
   } else {
-    // If no current player, select next unsold player
-    // During an active auction, exclude players that went unsold in THIS auction
-    // But include players unsold from previous auctions
     const soldPlayerIds = (auction.sales || []).map((s: any) => s.playerId);
     const nextUnsoldPlayer = await Player.findOne({
       $or: [
         { teamId: { $exists: false } },
         { teamId: null },
         { teamId: "" },
-        { teamId: "UNSOLD" }, // Include players unsold in previous auctions
+        { teamId: "UNSOLD" },
       ],
-      // Exclude players sold or unsold in THIS auction
       _id: { $nin: [...soldPlayerIds, ...(auction.unsoldPlayers || [])] },
     })
       .select("_id name photo age role bowlerType basePrice teamId")
@@ -224,27 +211,23 @@ const bidSchema = Joi.object({
   playerId: Joi.string().optional(),
 });
 
-// Request deduplication map to prevent duplicate bids
 const pendingBids = new Map<string, Promise<any>>();
 
 export async function placeBid(req: Request, res: Response) {
   try {
-    const { id } = req.params; // auction id
+    const { id } = req.params;
     const { error, value } = bidSchema.validate(req.body);
     if (error)
       return res.status(StatusCodes.BAD_REQUEST).json({ error: error.message });
 
-    // Create deduplication key to prevent duplicate bids (per team per auction)
     const dedupeKey = `bid:${id}:${value.teamId}`;
     const existing = pendingBids.get(dedupeKey);
     if (existing) {
-      // If a bid is already in progress for this team, return existing promise
       return existing;
     }
 
     const bidPromise = (async () => {
       try {
-        // Use parallel queries for better performance
         const [auction, team, user] = await Promise.all([
           Auction.findById(id).select(
             "state currentBid currentPlayerId roomCode skippedTeams teams bidHistory"
@@ -268,7 +251,6 @@ export async function placeBid(req: Request, res: Response) {
             .status(StatusCodes.BAD_REQUEST)
             .json({ error: "Invalid team" });
 
-        // Enforce captains can only bid for their own team
         const currentUser = (req as any).user as
           | { id: string; role: "admin" | "captain" | "player" }
           | undefined;
@@ -281,43 +263,21 @@ export async function placeBid(req: Request, res: Response) {
           }
         }
 
-        // Minimum bid and increment over current
         const minBid = 1000;
         if (value.amount < minBid)
           return res
             .status(StatusCodes.BAD_REQUEST)
             .json({ error: `Minimum bid is ${minBid}` });
 
-        // Re-fetch auction to get latest currentBid (prevent race condition)
-        const latestAuction = await Auction.findById(id).select(
-          "currentBid currentPlayerId"
-        );
-        if (!latestAuction) {
-          return res
-            .status(StatusCodes.NOT_FOUND)
-            .json({ error: "Auction not found" });
-        }
-
-        if (
-          latestAuction.currentBid &&
-          value.amount <= latestAuction.currentBid.amount
-        ) {
-          return res
-            .status(StatusCodes.BAD_REQUEST)
-            .json({ error: "Bid must be higher than current highest bid" });
-        }
-
-        // Budget enforcement
         if (team.wallet < value.amount)
           return res
             .status(StatusCodes.BAD_REQUEST)
             .json({ error: "Insufficient team budget" });
 
-        // If enforcing player-based round, ensure bidding on the current player
         if (
-          latestAuction.currentPlayerId &&
+          auction.currentPlayerId &&
           value.playerId &&
-          latestAuction.currentPlayerId !== value.playerId
+          auction.currentPlayerId !== value.playerId
         ) {
           return res
             .status(StatusCodes.BAD_REQUEST)
@@ -331,9 +291,19 @@ export async function placeBid(req: Request, res: Response) {
           at: new Date(),
         };
 
-        // Use atomic update to prevent race conditions
-        const updatedAuction = await Auction.findByIdAndUpdate(
-          id,
+        // FIX: Use Atomic Update with Condition to prevent Race Conditions
+        // We only update if the incoming bid is greater than the current bid stored in DB.
+        // Or if there is no current bid.
+        const query = {
+          _id: id,
+          $or: [
+            { currentBid: { $exists: false } },
+            { "currentBid.amount": { $lt: value.amount } },
+          ],
+        };
+
+        const updatedAuction = await Auction.findOneAndUpdate(
+          query,
           {
             $set: { currentBid: bid, skippedTeams: [] },
             $push: { bidHistory: bid },
@@ -342,15 +312,14 @@ export async function placeBid(req: Request, res: Response) {
         );
 
         if (!updatedAuction) {
+          // If update failed, it means someone else bid higher in the meantime
           return res
-            .status(StatusCodes.INTERNAL_SERVER_ERROR)
-            .json({ error: "Failed to update auction" });
+            .status(StatusCodes.CONFLICT) // 409 Conflict
+            .json({ error: "Bid rejected: A higher bid was just placed." });
         }
 
-        // Reset timer when new bid comes in (non-blocking)
         resetAuctionTimer(id, updatedAuction.roomCode).catch(console.error);
 
-        // Broadcast update (non-blocking)
         try {
           const io = getIO();
           io.to(updatedAuction.roomCode).emit("auction:bid_update", {
@@ -363,7 +332,6 @@ export async function placeBid(req: Request, res: Response) {
 
         return res.status(StatusCodes.OK).json({ auction: updatedAuction });
       } finally {
-        // Clear deduplication after 500ms
         setTimeout(() => {
           pendingBids.delete(dedupeKey);
         }, 500);
@@ -381,13 +349,12 @@ export async function placeBid(req: Request, res: Response) {
 }
 
 export async function undoBid(req: Request, res: Response) {
-  const { id } = req.params; // auction id
+  const { id } = req.params;
   const user = (req as any).user as { id: string; role: string } | undefined;
   if (!user) {
     return res.status(StatusCodes.UNAUTHORIZED).json({ error: "Unauthorized" });
   }
 
-  // Optimize query - only fetch needed fields
   const auction = await Auction.findById(id).select(
     "state currentBid bidHistory roomCode"
   );
@@ -409,7 +376,6 @@ export async function undoBid(req: Request, res: Response) {
       .json({ error: "No bid to undo" });
   }
 
-  // Get captain's team - only fetch teamId
   const dbUser = await User.findById(user.id).select("teamId").lean();
   if (!dbUser || !dbUser.teamId) {
     return res
@@ -419,14 +385,12 @@ export async function undoBid(req: Request, res: Response) {
 
   const teamId = dbUser.teamId;
 
-  // Check if the current bid is from this team
   if (auction.currentBid.teamId !== teamId) {
     return res
       .status(StatusCodes.FORBIDDEN)
       .json({ error: "You can only undo your own bid" });
   }
 
-  // Check if this is the latest bid (by checking if there are any bids after it in bidHistory)
   const lastBidIndex = auction.bidHistory.length - 1;
   const lastBid = auction.bidHistory[lastBidIndex];
 
@@ -440,21 +404,17 @@ export async function undoBid(req: Request, res: Response) {
       .json({ error: "Cannot undo: another team has bid after you" });
   }
 
-  // Remove the last bid from history
   auction.bidHistory.pop();
 
-  // Find the previous bid (if any) to set as current bid
   if (auction.bidHistory.length > 0) {
     const previousBid = auction.bidHistory[auction.bidHistory.length - 1];
     auction.currentBid = previousBid;
   } else {
-    // No previous bids, clear current bid
     auction.currentBid = undefined;
   }
 
   await auction.save();
 
-  // Get team name for broadcast
   const team = await Team.findById(teamId);
   const teamName = team?.name || `Team ${teamId.substring(0, 6)}`;
 
@@ -466,7 +426,6 @@ export async function undoBid(req: Request, res: Response) {
       currentBid: auction.currentBid,
     });
 
-    // Reset timer after undo
     if (auction.currentBid) {
       await resetAuctionTimer(id, auction.roomCode);
     }
@@ -483,14 +442,11 @@ export async function closeAuction(req: Request, res: Response) {
       .status(StatusCodes.NOT_FOUND)
       .json({ error: "Auction not found" });
 
-  // Stop the timer
   stopAuctionTimer(id);
 
-  // Update auction state
   auction.state = "completed";
   await auction.save();
 
-  // Broadcast auction ended event to all connected clients
   try {
     const io = getIO();
     io.to(auction.roomCode).emit("auction:ended", {
@@ -518,7 +474,6 @@ export async function setCurrentPlayer(req: Request, res: Response) {
       .status(StatusCodes.NOT_FOUND)
       .json({ error: "Auction not found" });
 
-  // Load player details for broadcast
   const player = await Player.findById(value.playerId);
   if (player) {
     try {
@@ -542,14 +497,13 @@ export async function setCurrentPlayer(req: Request, res: Response) {
 }
 
 export async function sellCurrent(req: Request, res: Response) {
-  const { id } = req.params; // auction id
+  const { id } = req.params;
   const auction = await Auction.findById(id);
   if (!auction)
     return res
       .status(StatusCodes.NOT_FOUND)
       .json({ error: "Auction not found" });
 
-  // Prevent selling if auction is not active
   if (auction.state !== "active") {
     return res
       .status(StatusCodes.BAD_REQUEST)
@@ -561,7 +515,6 @@ export async function sellCurrent(req: Request, res: Response) {
       .status(StatusCodes.BAD_REQUEST)
       .json({ error: "No current player set" });
   if (!auction.currentBid) {
-    // If no bid, just move to next player without selling
     const nextUnsoldPlayer = await Player.findOne({
       $or: [{ teamId: { $exists: false } }, { teamId: null }],
     })
@@ -619,7 +572,6 @@ export async function sellCurrent(req: Request, res: Response) {
       .status(StatusCodes.BAD_REQUEST)
       .json({ error: "Player not found" });
 
-  // Check if player is already sold (prevent double-selling)
   const alreadySold = auction.sales.some(
     (sale: any) => sale.playerId === auction.currentPlayerId
   );
@@ -629,17 +581,14 @@ export async function sellCurrent(req: Request, res: Response) {
       .json({ error: "Player already sold" });
   }
 
-  // Check if player is already assigned to a team
   if (player.teamId && player.teamId !== "UNSOLD") {
     return res
       .status(StatusCodes.BAD_REQUEST)
       .json({ error: "Player already assigned to a team" });
   }
 
-  // Deduct and assign using atomic operation
   const salePrice = auction.currentBid.amount;
 
-  // Use atomic operation to deduct wallet (prevents race conditions)
   const updatedTeam = await Team.findByIdAndUpdate(
     team.id,
     { $inc: { wallet: -salePrice } },
@@ -651,10 +600,9 @@ export async function sellCurrent(req: Request, res: Response) {
       .json({ error: "Insufficient team budget" });
   }
 
-  player.teamId = team.id; // Use id property (Mongoose provides this)
+  player.teamId = team.id;
   await player.save();
 
-  // Update auction with sale and clear current bid
   auction.sales.push({
     playerId: player.id,
     teamId: team.id,
@@ -662,20 +610,16 @@ export async function sellCurrent(req: Request, res: Response) {
     at: new Date(),
   });
   auction.currentBid = undefined;
-  await auction.save(); // Save auction after sale
+  await auction.save();
 
-  // Automatically select next unsold player - optimize query
-  // During an active auction, exclude players that went unsold in THIS auction
-  // But include players unsold from previous auctions
   const soldPlayerIds = (auction.sales || []).map((s: any) => s.playerId);
   const nextUnsoldPlayer = await Player.findOne({
     $or: [
       { teamId: { $exists: false } },
       { teamId: null },
       { teamId: "" },
-      { teamId: "UNSOLD" }, // Include players unsold in previous auctions
+      { teamId: "UNSOLD" },
     ],
-    // Exclude players sold or unsold in THIS auction
     _id: { $nin: [...soldPlayerIds, ...(auction.unsoldPlayers || [])] },
   })
     .select("_id name photo age role bowlerType basePrice teamId")
@@ -691,7 +635,6 @@ export async function sellCurrent(req: Request, res: Response) {
       auction.currentPlayerId = playerId;
       await auction.save();
 
-      // Broadcast sale and next player
       try {
         const io = getIO();
         io.to(auction.roomCode).emit("auction:sale", {
@@ -718,12 +661,10 @@ export async function sellCurrent(req: Request, res: Response) {
       }
     }
   } else {
-    // No more unsold players - mark auction as completed
     auction.state = "completed";
     auction.currentPlayerId = undefined;
     await auction.save();
 
-    // Broadcast sale and completion
     try {
       const io = getIO();
       io.to(auction.roomCode).emit("auction:sale", {
@@ -743,13 +684,12 @@ export async function sellCurrent(req: Request, res: Response) {
 }
 
 export async function skipPlayer(req: Request, res: Response) {
-  const { id } = req.params; // auction id
+  const { id } = req.params;
   const user = (req as any).user as { id: string; role: string } | undefined;
   if (!user) {
     return res.status(StatusCodes.UNAUTHORIZED).json({ error: "Unauthorized" });
   }
 
-  // Optimize query - only fetch needed fields
   const auction = await Auction.findById(id).select(
     "state currentPlayerId skippedTeams teams roomCode currentBid"
   );
@@ -771,7 +711,6 @@ export async function skipPlayer(req: Request, res: Response) {
       .json({ error: "No current player set" });
   }
 
-  // Get captain's team - only fetch teamId
   const dbUser = await User.findById(user.id).select("teamId");
   if (!dbUser || !dbUser.teamId) {
     return res
@@ -781,21 +720,18 @@ export async function skipPlayer(req: Request, res: Response) {
 
   const teamId = dbUser.teamId;
 
-  // Check if team already skipped
   if (auction.skippedTeams?.includes(teamId)) {
     return res
       .status(StatusCodes.BAD_REQUEST)
       .json({ error: "You have already skipped this player" });
   }
 
-  // Add team to skipped teams
   if (!auction.skippedTeams) {
     auction.skippedTeams = [];
   }
   auction.skippedTeams.push(teamId);
   await auction.save();
 
-  // Get team name for broadcast
   const team = await Team.findById(teamId);
   const teamName = team?.name || `Team ${teamId.substring(0, 6)}`;
 
@@ -807,7 +743,6 @@ export async function skipPlayer(req: Request, res: Response) {
       playerId: auction.currentPlayerId,
     });
 
-    // Check if all captain teams have skipped - optimize query
     const teams = await Team.find({ _id: { $in: auction.teams } })
       .select("captainId _id")
       .lean();
@@ -818,13 +753,10 @@ export async function skipPlayer(req: Request, res: Response) {
       captainTeams.length > 0 &&
       captainTeams.every((tid) => auction.skippedTeams?.includes(tid));
 
-    // Check if current bidder has also skipped
     const currentBidderSkipped =
       auction.currentBid &&
       auction.skippedTeams?.includes(auction.currentBid.teamId);
 
-    // If all teams skipped OR bidder skipped, mark as unsold (even if there was a bid)
-    // This ensures that if someone bid then skipped, and everyone else skipped, player goes unsold
     if (allSkipped || currentBidderSkipped) {
       const { markPlayerUnsold, stopAuctionTimer } = await import(
         "../utils/timer.js"
@@ -836,8 +768,6 @@ export async function skipPlayer(req: Request, res: Response) {
         .json({ message: "Player marked as unsold" });
     }
 
-    // Check if only one captain hasn't skipped and that captain has the current bid
-    // If so, immediately sell the player to that captain without waiting for timer
     const remainingCaptains = captainTeams.filter(
       (tid) => !auction.skippedTeams?.includes(tid)
     );
@@ -847,7 +777,6 @@ export async function skipPlayer(req: Request, res: Response) {
       auction.currentBid &&
       auction.currentBid.teamId === remainingCaptains[0]
     ) {
-      // Only one captain left, and they have the bid - sell immediately
       const { sellCurrentPlayer, stopAuctionTimer } = await import(
         "../utils/timer.js"
       );

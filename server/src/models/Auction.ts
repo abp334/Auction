@@ -1,4 +1,4 @@
-import { Schema, model, type Document, Types } from "mongoose";
+import { Schema, model, type Document } from "mongoose";
 
 export type AuctionState = "draft" | "active" | "paused" | "completed";
 
@@ -11,19 +11,20 @@ export interface BidRecord {
 
 export interface AuctionDocument extends Document {
   name: string;
-  roomCode: string; // for Socket.IO room
+  roomCode: string;
   state: AuctionState;
-  players: string[]; // player ids participating
-  teams: string[]; // team ids participating
+  players: string[];
+  teams: string[];
   currentPlayerId?: string;
   currentBid?: BidRecord;
   bidHistory: BidRecord[];
   sales: { playerId: string; teamId: string; price: number; at: Date }[];
-  unsoldPlayers?: string[]; // player IDs that went unsold in THIS auction
-  skippedTeams?: string[]; // team IDs that skipped current player
-  timerStart?: Date; // when timer started for current player
-  timerDuration?: number; // timer duration in seconds (default 30)
-  createdBy: string; // admin or captain id
+  unsoldPlayers?: string[];
+  skippedTeams?: string[];
+  timerStart?: Date;
+  timerDuration?: number;
+  timerEndsAt?: Date; // <--- ADDED THIS FIELD
+  createdBy: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -46,27 +47,27 @@ const auctionSchema = new Schema<AuctionDocument>(
       type: String,
       enum: ["draft", "active", "paused", "completed"],
       default: "draft",
-      index: true, // Index for filtering active auctions
+      index: true,
     },
     players: [{ type: String, ref: "Player" }],
     teams: [{ type: String, ref: "Team" }],
-    currentPlayerId: { type: String, index: true }, // Index for current player lookups
+    currentPlayerId: { type: String, index: true },
     currentBid: { type: bidRecordSchema },
     bidHistory: { type: [bidRecordSchema], default: [] },
     sales: {
       type: [{ playerId: String, teamId: String, price: Number, at: Date }],
       default: [],
     },
-    unsoldPlayers: { type: [String], default: [] }, // player IDs that went unsold in THIS auction
-    skippedTeams: { type: [String], default: [] }, // team IDs that skipped current player
-    timerStart: { type: Date }, // when timer started for current player
-    timerDuration: { type: Number, default: 30 }, // timer duration in seconds
+    unsoldPlayers: { type: [String], default: [] },
+    skippedTeams: { type: [String], default: [] },
+    timerStart: { type: Date },
+    timerDuration: { type: Number, default: 30 },
+    timerEndsAt: { type: Date }, // <--- ADDED TO SCHEMA
     createdBy: { type: String, required: true },
   },
   { timestamps: true }
 );
 
-// Compound index for common queries
 auctionSchema.index({ state: 1, roomCode: 1 });
 auctionSchema.index({ state: 1, currentPlayerId: 1 });
 
