@@ -75,15 +75,15 @@ const loginSchema = Joi.object({
 });
 
 function setRefreshCookie(res: Response, token: string) {
-  // Determine if we are in production based on NODE_ENV or if we are cross-origin
+  // Determine if we are in production
   const isProduction = process.env.NODE_ENV === "production";
 
   res.cookie("rt", token, {
     httpOnly: true,
-    // Always use secure in production, or if we are explicitly not on localhost
-    secure: isProduction,
-    // essential for cross-site (Vercel -> Render) cookies
-    sameSite: isProduction ? "none" : "lax",
+    // MUST be true for cross-site cookies to work (Vercel -> Render)
+    secure: true,
+    // MUST be 'none' to allow cross-site usage
+    sameSite: "none",
     path: "/api/v1/auth",
     maxAge: 7 * 24 * 60 * 60 * 1000,
   });

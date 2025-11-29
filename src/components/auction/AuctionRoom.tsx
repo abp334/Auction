@@ -194,17 +194,20 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
 
   // Socket Connection
   useEffect(() => {
-    const backendUrl =
-      import.meta.env.VITE_SERVER_URL || window.location.origin;
+    // ⚠️ REPLACE THIS STRING with your actual Render/Railway backend URL
+    // Do NOT include /api/v1 at the end. It should look like: "https://bidarena-backend.onrender.com"
+    const backendUrl = "https://auction-nsx0.onrender.com";
+
+    console.log("Connecting to Socket.IO at:", backendUrl); // Debug log
 
     import("@/lib/api").then(({ getAccessToken }) => {
       const token = getAccessToken ? getAccessToken() : null;
+
       const s = io(backendUrl, {
         withCredentials: true,
-        transports: ["websocket", "polling"],
+        transports: ["websocket", "polling"], // Force these transports
         auth: { token },
       });
-
       s.on("connect", () => {
         s.emit("auction:join", roomCode);
       });
