@@ -509,13 +509,13 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
                     </h2>
 
                     <div className="flex gap-4 text-sm mb-8 justify-center">
-                      <span className="bg-amber-500/20 px-3 py-1 rounded-full">
+                      <span className="bg-amber-500/20 px-3 py-1 rounded-full text-white">
                         Age: {currentPlayer.age}
                       </span>
-                      <span className="bg-blue-500/20 px-3 py-1 rounded-full">
+                      <span className="bg-blue-500/20 px-3 py-1 rounded-full text-white">
                         ⚾ {currentPlayer.batsmanType}
                       </span>
-                      <span className="bg-green-500/20 px-3 py-1 rounded-full">
+                      <span className="bg-green-500/20 px-3 py-1 rounded-full text-white">
                         🏏 {currentPlayer.bowlerType}
                       </span>
                     </div>
@@ -526,7 +526,7 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
                           Current Bid
                         </p>
                         <p className="text-6xl font-bold text-amber-400">
-                          ${currentPlayer.currentBid.toLocaleString()}
+                          {currentPlayer.currentBid.toLocaleString()} Points
                         </p>
                       </div>
 
