@@ -34,10 +34,19 @@ const loginSchema = Joi.object({
 
 // --- HELPER FUNCTIONS ---
 
+// Replace the existing sendOtpEmail function with this debug version
 async function sendOtpEmail(email: string, otp: string) {
   const message = `Your verification code is ${otp}. It will expire in 10 minutes.`;
 
-  // Prefer EmailJS if configured in .env
+  console.log("--- DEBUG EMAIL START ---");
+  console.log("Service:", process.env.EMAILJS_SERVICE_ID);
+  console.log("Template:", process.env.EMAILJS_TEMPLATE_ID);
+  console.log(
+    "User/Public Key:",
+    process.env.EMAILJS_USER_ID || process.env.EMAILJS_PUBLIC_KEY
+  );
+  console.log("Sending to:", email);
+
   const emailJsService = process.env.EMAILJS_SERVICE_ID;
   const emailJsTemplate = process.env.EMAILJS_TEMPLATE_ID;
   const emailJsUser =
@@ -50,29 +59,35 @@ async function sendOtpEmail(email: string, otp: string) {
         template_id: emailJsTemplate,
         user_id: emailJsUser,
         template_params: {
-          to_email: email,
-          otp,
-          message,
+          to_email: email, // Ensure your EmailJS template "To Email" field is set to {{to_email}}
+          otp: otp,
+          message: message,
         },
       };
+
       const res = await fetch("https://api.emailjs.com/api/v1.0/email/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
 
+      const responseText = await res.text();
       if (res.ok) {
-        console.info(`EmailJS send OK for ${email}`);
+        console.info(`✅ EmailJS send OK: ${responseText}`);
         return;
       } else {
-        console.error(`EmailJS failed: ${await res.text()}`);
+        console.error(
+          `❌ EmailJS failed. Status: ${res.status}. Response: ${responseText}`
+        );
       }
     } catch (err) {
-      console.error("Failed to send OTP via EmailJS", err);
+      console.error("❌ Network Error sending to EmailJS:", err);
     }
+  } else {
+    console.warn("⚠️ Missing EmailJS Environment Variables");
   }
 
-  // Fallback: Log OTP to console (for localhost development)
+  // Fallback
   console.info(`[DEV] OTP for ${email}: ${otp}`);
 }
 
