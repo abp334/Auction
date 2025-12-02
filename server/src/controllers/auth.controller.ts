@@ -38,28 +38,22 @@ const loginSchema = Joi.object({
 async function sendOtpEmail(email: string, otp: string) {
   const message = `Your verification code is ${otp}. It will expire in 10 minutes.`;
 
-  console.log("--- DEBUG EMAIL START ---");
-  console.log("Service:", process.env.EMAILJS_SERVICE_ID);
-  console.log("Template:", process.env.EMAILJS_TEMPLATE_ID);
-  console.log(
-    "User/Public Key:",
-    process.env.EMAILJS_USER_ID || process.env.EMAILJS_PUBLIC_KEY
-  );
-  console.log("Sending to:", email);
-
-  const emailJsService = process.env.EMAILJS_SERVICE_ID;
-  const emailJsTemplate = process.env.EMAILJS_TEMPLATE_ID;
-  const emailJsUser =
+  // Read environment variables
+  const serviceId = process.env.EMAILJS_SERVICE_ID;
+  const templateId = process.env.EMAILJS_TEMPLATE_ID;
+  const publicKey =
     process.env.EMAILJS_USER_ID || process.env.EMAILJS_PUBLIC_KEY;
+  const privateKey = process.env.EMAILJS_PRIVATE_KEY; // NEW: Required for server-side
 
-  if (emailJsService && emailJsTemplate && emailJsUser) {
+  if (serviceId && templateId && publicKey) {
     try {
       const body = {
-        service_id: emailJsService,
-        template_id: emailJsTemplate,
-        user_id: emailJsUser,
+        service_id: serviceId,
+        template_id: templateId,
+        user_id: publicKey,
+        accessToken: privateKey, // NEW: Pass Private Key here
         template_params: {
-          to_email: email, // Ensure your EmailJS template "To Email" field is set to {{to_email}}
+          to_email: email,
           otp: otp,
           message: message,
         },
@@ -72,23 +66,26 @@ async function sendOtpEmail(email: string, otp: string) {
       });
 
       const responseText = await res.text();
-      if (res.ok) {
-        console.info(`✅ EmailJS send OK: ${responseText}`);
-        return;
-      } else {
+
+      if (!res.ok) {
         console.error(
-          `❌ EmailJS failed. Status: ${res.status}. Response: ${responseText}`
+          `❌ EmailJS Send Failed [${res.status}]: ${responseText}`
         );
+        return false;
+      } else {
+        console.info(`✅ EmailJS Send Success for ${email}`);
+        return true;
       }
     } catch (err) {
-      console.error("❌ Network Error sending to EmailJS:", err);
+      console.error("❌ EmailJS Network Error:", err);
+      return false;
     }
   } else {
-    console.warn("⚠️ Missing EmailJS Environment Variables");
+    console.warn("⚠️ EmailJS not configured. Printing OTP to console.");
+    // Fallback logging
+    console.info(`[DEV] OTP for ${email}: ${otp}`);
+    return true; // Treat as success for dev
   }
-
-  // Fallback
-  console.info(`[DEV] OTP for ${email}: ${otp}`);
 }
 
 function setRefreshCookie(res: Response, token: string) {
