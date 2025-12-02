@@ -18,6 +18,7 @@ type AuthContextValue = {
     name: string;
     role?: "admin" | "player";
   }) => Promise<boolean>;
+  // ADDED: Verification function
   verifySignupOtp: (email: string, otp: string) => Promise<boolean>;
   logout: () => Promise<void>;
 };
@@ -51,11 +52,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       body: JSON.stringify(payload),
       credentials: "include",
     });
+    // If successful, server returns 200 OK (OTP sent)
     if (!res.ok) return false;
-    // Server sends back message that OTP is sent - client should prompt for OTP
     return true;
   };
 
+  // ADDED: Call the verify endpoint
   const verifySignupOtp = async (email: string, otp: string) => {
     const res = await apiFetch("/auth/verify-otp", {
       method: "POST",
@@ -63,6 +65,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       credentials: "include",
     });
     if (!res.ok) return false;
+    // On success, we get the token and user data immediately
     const data = await res.json();
     setAccessToken(data.accessToken);
     setUser(data.user);
@@ -75,7 +78,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(null);
   };
 
-  // Try load session
+  // Try load session on mount
   useEffect(() => {
     (async () => {
       try {
@@ -93,7 +96,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           setUser(user);
         }
       } catch {
-        // ignore refresh failures on cold load
+        // ignore errors
       }
     })();
   }, []);

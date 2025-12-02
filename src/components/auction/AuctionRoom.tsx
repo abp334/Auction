@@ -2,7 +2,15 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowLeft, Gavel, Clock, Trophy, User } from "lucide-react";
+import {
+  ArrowLeft,
+  Gavel,
+  Clock,
+  Trophy,
+  User,
+  AlertTriangle,
+  RefreshCcw,
+} from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 import confetti from "canvas-confetti";
@@ -54,9 +62,9 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
   const [hasSkipped, setHasSkipped] = useState(false);
   const [myTeamPlayers, setMyTeamPlayers] = useState<Player[]>([]);
   const [myTeamId, setMyTeamId] = useState<string | null>(null);
+  const [isTeamValid, setIsTeamValid] = useState(true); // Track if team exists
   const [auctionId, setAuctionId] = useState<string | null>(null);
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const [auction, setAuction] = useState<any>(null);
+  const [dataError, setDataError] = useState(false);
 
   // Action States
   const [isBidding, setIsBidding] = useState(false);
@@ -65,8 +73,6 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
 
   // Refs
   const teamsRef = useRef<Team[]>([]);
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const bidTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const auctionEndTimeRef = useRef<number | null>(null);
   const socketRef = useRef<Socket | null>(null);
 
@@ -74,7 +80,6 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
   const loadMyPlayers = useCallback(async () => {
     if (role === "captain" && user?.teamId) {
       try {
-        // Fetch players assigned to my team
         const pRes = await apiFetch(`/players?teamId=${user.teamId}`);
         if (pRes.ok) {
           const { players } = await pRes.json();
@@ -96,7 +101,7 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
     }
   }, [role, user]);
 
-  // Helper: Fetch Teams
+  // Helper: Fetch Teams & Validate My Team
   const loadTeams = useCallback(async () => {
     try {
       const tRes = await apiFetch("/teams");
@@ -115,7 +120,16 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
 
         if (role === "captain" && user?.teamId) {
           const myTeam = mappedTeams.find((t: any) => t.id === user.teamId);
-          setMyTeamId(myTeam ? myTeam.id : user.teamId);
+          if (myTeam) {
+            setMyTeamId(myTeam.id);
+            setIsTeamValid(true);
+          } else {
+            console.warn(
+              "My Team ID not found in current auction teams. Stale session?"
+            );
+            setMyTeamId(user.teamId); // Keep it but mark invalid
+            setIsTeamValid(false);
+          }
         }
       }
     } catch (e) {
@@ -135,13 +149,11 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
       if (!a) return;
 
       setAuctionId(a._id);
-      setAuction(a);
 
-      // SYNC CLOCK: Use absolute server time
+      // SYNC CLOCK
       if (a.timerEndsAt && a.state === "active") {
         auctionEndTimeRef.current = new Date(a.timerEndsAt).getTime();
       } else if (a.state === "active" && a.currentPlayerId) {
-        // Fallback for manual start where timerEndsAt might not be set initially
         auctionEndTimeRef.current = Date.now() + (a.timerDuration || 30) * 1000;
       } else {
         auctionEndTimeRef.current = null;
@@ -159,6 +171,7 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
         const pRes = await apiFetch(`/players/${a.currentPlayerId}`);
         if (pRes.ok) {
           const { player } = await pRes.json();
+          setDataError(false);
           setCurrentPlayer({
             id: player._id,
             name: player.name,
@@ -167,6 +180,18 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
             age: player.age || 25,
             batsmanType: player.role || "",
             bowlerType: player.bowlerType || "Not a Bowler",
+          });
+        } else {
+          console.error("Player not found in DB but exists in Auction state.");
+          setDataError(true);
+          setCurrentPlayer({
+            id: a.currentPlayerId,
+            name: "Unknown Player (Data Missing)",
+            photo: "",
+            currentBid: 0,
+            age: 0,
+            batsmanType: "Unknown",
+            bowlerType: "Unknown",
           });
         }
       } else {
@@ -177,7 +202,7 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
     }
   }, [roomCode]);
 
-  // Initial Load & Cleanup
+  // Initial Load
   useEffect(() => {
     const init = async () => {
       await loadTeams();
@@ -187,28 +212,40 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
       );
     };
     init();
-
-    // Load captain's players
     loadMyPlayers();
   }, [roomCode, loadTeams, fetchLatestAuctionState, loadMyPlayers]);
 
   // Socket Connection
   useEffect(() => {
-    // ⚠️ REPLACE THIS STRING with your actual Render/Railway backend URL
-    // Do NOT include /api/v1 at the end. It should look like: "https://bidarena-backend.onrender.com"
-    const backendUrl = "https://auction-nsx0.onrender.com";
+    if (socketRef.current?.connected) return;
 
-    console.log("Connecting to Socket.IO at:", backendUrl); // Debug log
+    // FIX: Default to 5001 locally if not specified, or fallback to render
+    let backendUrl = import.meta.env.VITE_SERVER_URL;
+
+    if (
+      window.location.hostname === "localhost" ||
+      window.location.hostname === "127.0.0.1"
+    ) {
+      // Changed to 5001 based on your logs
+      backendUrl = "http://localhost:5001";
+    } else if (!backendUrl) {
+      backendUrl = "https://auction-nsx0.onrender.com";
+    }
+
+    console.log("Connecting to Socket.IO at:", backendUrl);
 
     import("@/lib/api").then(({ getAccessToken }) => {
       const token = getAccessToken ? getAccessToken() : null;
 
       const s = io(backendUrl, {
         withCredentials: true,
-        transports: ["websocket", "polling"], // Force these transports
+        transports: ["websocket", "polling"],
         auth: { token },
+        reconnection: true,
       });
+
       s.on("connect", () => {
+        console.log("Socket connected:", s.id);
         s.emit("auction:join", roomCode);
       });
 
@@ -223,10 +260,8 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
           )
         );
 
-        // Crucial Fix: Rely solely on the server's broadcast for the canonical bid amount
         setCurrentPlayer((p) => (p ? { ...p, currentBid: e.amount } : null));
         setLastBidTeam(e.teamId);
-
         auctionEndTimeRef.current = Date.now() + 30000;
       });
 
@@ -242,6 +277,7 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
         setCommentary((prev) =>
           [`Next Player: ${e.player.name}`, ...prev].slice(0, 10)
         );
+        setDataError(false);
         setCurrentPlayer({
           id: e.player.id,
           name: e.player.name,
@@ -251,6 +287,7 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
           batsmanType: e.player.role || "",
           bowlerType: e.player.bowlerType || "Not a Bowler",
         });
+
         setHasSkipped(false);
         setLastBidTeam(null);
 
@@ -274,9 +311,7 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
 
         auctionEndTimeRef.current = null;
         setTimeLeft(0);
-        setCurrentPlayer(null); // Clear player immediately, wait for next player event
-
-        // Crucial Fix: Reload data to update purses and my players list
+        setCurrentPlayer(null);
         loadTeams();
         loadMyPlayers();
       });
@@ -287,9 +322,7 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
         );
         auctionEndTimeRef.current = null;
         setTimeLeft(0);
-        setCurrentPlayer(null); // Clear player immediately, wait for next player event
-
-        // Crucial Fix: Reload teams to ensure correct UI state
+        setCurrentPlayer(null);
         loadTeams();
       });
 
@@ -297,19 +330,15 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
         setCommentary((prev) =>
           [`${e.teamName} withdrew their bid.`, ...prev].slice(0, 10)
         );
-        // Sync bid amount from server's payload
         if (e.currentBid) {
           setCurrentPlayer((p) =>
             p ? { ...p, currentBid: e.currentBid.amount } : null
           );
           setLastBidTeam(e.currentBid.teamId);
         } else {
-          // If currentBid is null/undefined after undo, reset to base price (or 1000)
           setCurrentPlayer((p) => (p ? { ...p, currentBid: 1000 } : null));
           setLastBidTeam(null);
         }
-
-        // Reload teams to ensure purse is updated after undo
         loadTeams();
         loadMyPlayers();
       });
@@ -319,10 +348,7 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
           teamsRef.current.find((t) => t.id === e.teamId)?.name ||
           "Unknown Team";
         setCommentary((prev) =>
-          [
-            `${teamName} skipped player ${currentPlayer?.name || e.playerId}.`,
-            ...prev,
-          ].slice(0, 10)
+          [`${teamName} skipped player.`, ...prev].slice(0, 10)
         );
       });
 
@@ -337,11 +363,12 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
     return () => {
       if (socketRef.current) {
         socketRef.current.disconnect();
+        socketRef.current = null;
       }
     };
-  }, [roomCode, loadTeams, loadMyPlayers, onExit, currentPlayer?.name]);
+  }, [roomCode, loadTeams, loadMyPlayers, onExit]);
 
-  // Local Timer Tick (No change needed)
+  // Local Timer Tick
   useEffect(() => {
     const interval = setInterval(() => {
       if (!auctionEndTimeRef.current) {
@@ -357,36 +384,51 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
 
   // Handlers
   const handleBid = async () => {
-    // 1. Guard clause: Ensure we have all necessary data
     if (!auctionId || !currentPlayer || isBidding || !myTeamId) return;
-
     setIsBidding(true);
+
     const newBid = (currentPlayer.currentBid || 0) + 1000;
 
     try {
-      // 2. CHANGE: Always use REST API for bidding.
-      // This ensures the auth token is refreshed automatically via apiFetch if it expired.
-      // The socket.emit method does not handle 401/refresh logic, which is why your bids were failing silently.
-      await apiFetch(`/auctions/${auctionId}/bid`, {
+      const res = await apiFetch(`/auctions/${auctionId}/bid`, {
         method: "POST",
-        body: JSON.stringify({ amount: newBid, teamId: myTeamId }),
+        body: JSON.stringify({
+          amount: newBid,
+          teamId: myTeamId,
+          playerId: currentPlayer.id,
+        }),
       });
 
-      // Note: We do NOT need to manually update state here.
-      // The server will process the POST request and emit 'auction:bid_update' via Socket.IO.
-      // Your useEffect listener will catch that and update the UI for everyone simultaneously.
+      if (!res.ok) {
+        // Read the actual error message
+        const errData = await res.json();
+        const errorMessage = errData.error || "Unknown error";
+
+        await fetchLatestAuctionState();
+
+        if (res.status === 409) {
+          toast({
+            title: "Bid Too Low",
+            description: "Another team placed a higher bid.",
+            variant: "default",
+          });
+        } else {
+          // Display specific server error (e.g., "Insufficient budget", "Invalid team")
+          toast({
+            title: "Bid Failed",
+            description: errorMessage,
+            variant: "destructive",
+          });
+        }
+      }
     } catch (e) {
       console.error("Bid error", e);
-      toast({
-        title: "Bid Failed",
-        description: "Could not place bid. Please check your connection.",
-        variant: "destructive",
-      });
       await fetchLatestAuctionState();
     } finally {
       setTimeout(() => setIsBidding(false), 500);
     }
   };
+
   const handleSkip = async () => {
     if (!auctionId || isSkipping) return;
     setIsSkipping(true);
@@ -433,11 +475,10 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
       if (res.ok) {
         toast({ title: "Bid Undone", description: "Bid withdrawn" });
       } else {
-        // If server rejects undo, re-sync state
         await fetchLatestAuctionState();
         toast({
           title: "Undo Failed",
-          description: "Server rejected the undo request. Status updated.",
+          description: "Server rejected the undo request.",
           variant: "destructive",
         });
       }
@@ -480,6 +521,27 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
       <main className="container mx-auto px-4 py-6">
         <div className="grid lg:grid-cols-[1fr,350px] gap-6">
           <div className="flex flex-col gap-4">
+            {/* Warning for Stale Session */}
+            {!isTeamValid && role === "captain" && (
+              <div className="bg-yellow-500/20 border border-yellow-500 text-yellow-200 p-4 rounded-lg flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <AlertTriangle className="w-5 h-5" />
+                  <span>
+                    <strong>Session Mismatch:</strong> Your team data is
+                    outdated. Please logout and log back in to sync.
+                  </span>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={onExit}
+                  className="border-yellow-500 text-yellow-500 hover:bg-yellow-500/20"
+                >
+                  <RefreshCcw className="w-4 h-4 mr-2" /> Re-Login
+                </Button>
+              </div>
+            )}
+
             <Card
               className={`border-4 bg-[#0f1419] ${
                 showCelebration ? "border-amber-500" : "border-amber-500/50"
@@ -495,6 +557,19 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
                   </div>
                 ) : (
                   <>
+                    {/* Error State Handling */}
+                    {dataError && (
+                      <div className="bg-red-500/10 border border-red-500/50 p-4 rounded-lg mb-6 flex items-center gap-3 w-full max-w-md">
+                        <AlertTriangle className="text-red-500 w-6 h-6" />
+                        <div className="text-left">
+                          <p className="font-bold text-red-400">Data Error</p>
+                          <p className="text-xs text-red-300">
+                            Player record missing in DB. Please skip.
+                          </p>
+                        </div>
+                      </div>
+                    )}
+
                     {currentPlayer.photo ? (
                       <img
                         src={currentPlayer.photo}
@@ -509,13 +584,13 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
                     </h2>
 
                     <div className="flex gap-4 text-sm mb-8 justify-center">
-                      <span className="bg-amber-500/20 px-3 py-1 rounded-full text-white">
+                      <span className="bg-amber-500/20 px-3 py-1 rounded-full">
                         Age: {currentPlayer.age}
                       </span>
-                      <span className="bg-blue-500/20 px-3 py-1 rounded-full text-white">
+                      <span className="bg-blue-500/20 px-3 py-1 rounded-full">
                         ⚾ {currentPlayer.batsmanType}
                       </span>
-                      <span className="bg-green-500/20 px-3 py-1 rounded-full text-white">
+                      <span className="bg-green-500/20 px-3 py-1 rounded-full">
                         🏏 {currentPlayer.bowlerType}
                       </span>
                     </div>
@@ -526,7 +601,7 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
                           Current Bid
                         </p>
                         <p className="text-6xl font-bold text-amber-400">
-                          {currentPlayer.currentBid.toLocaleString()} Points
+                          ${currentPlayer.currentBid.toLocaleString()}
                         </p>
                       </div>
 
@@ -548,12 +623,14 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
                           <Button
                             size="lg"
                             onClick={handleBid}
-                            // FIX: Disable button if myTeamId or currentPlayer is missing
+                            // Disabled if data error OR team invalid to prevent bad bids
                             disabled={
                               isBidding ||
                               timeLeft === 0 ||
                               !myTeamId ||
-                              !currentPlayer
+                              !isTeamValid ||
+                              !currentPlayer ||
+                              dataError
                             }
                             className="bg-green-600 hover:bg-green-700 h-14 text-lg font-bold"
                           >

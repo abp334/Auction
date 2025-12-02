@@ -1,28 +1,26 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+} from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import {
-  Calendar,
-  Clock,
   Copy,
   Play,
   Pause,
-  SkipForward,
-  RotateCcw,
-  Settings,
-  History,
+  Upload,
+  Download,
+  AlertTriangle,
+  FileSpreadsheet,
+  Users,
+  Trophy,
 } from "lucide-react";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -34,595 +32,540 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { apiFetch } from "@/lib/api";
+import { parseCSV, jsonToCSV } from "@/lib/utils";
 
 const AuctionTab = () => {
   const { toast } = useToast();
-  const [auctions, setAuctions] = useState<any[]>([]);
   const [currentAuction, setCurrentAuction] = useState<any>(null);
-  const [allPlayers, setAllPlayers] = useState<any[]>([]);
-  const [roomCode, setRoomCode] = useState("");
-  const [scheduleDate, setScheduleDate] = useState("");
-  const [scheduleTime, setScheduleTime] = useState("");
   const [auctionName, setAuctionName] = useState("");
-  const [bidIncrement, setBidIncrement] = useState("1000");
-  const [timerDuration, setTimerDuration] = useState("30");
+
+  // Separate states for the two CSVs
+  const [teamsData, setTeamsData] = useState<any[] | null>(null);
+  const [playersData, setPlayersData] = useState<any[] | null>(null);
+
   const [loading, setLoading] = useState(false);
   const [showEndConfirm, setShowEndConfirm] = useState(false);
 
-  const loadPlayers = useCallback(async () => {
-    const pRes = await apiFetch("/players");
-    if (pRes.ok) {
-      const { players } = await pRes.json();
-      // Filter out players already sold (have teamId)
-      setAllPlayers(players.filter((p: any) => !p.teamId));
-    }
-  }, []);
-
+  // Check for active auction on load
   useEffect(() => {
-    (async () => {
+    const checkActive = async () => {
       const res = await apiFetch("/auctions");
       if (res.ok) {
         const { auctions } = await res.json();
-        setAuctions(auctions);
         const active = auctions.find(
           (a: any) =>
             a.state === "active" || a.state === "draft" || a.state === "paused"
         );
-        if (active) {
-          setCurrentAuction(active);
-          setRoomCode(active.roomCode);
-        }
+        if (active) setCurrentAuction(active);
       }
-      await loadPlayers();
-    })();
+    };
+    checkActive();
   }, []);
 
-  // Refresh players and auction state periodically when auction is active
+  // Poll for updates if active
   useEffect(() => {
-    if (
-      !currentAuction ||
-      (currentAuction.state !== "active" && currentAuction.state !== "paused")
-    )
-      return;
-
+    if (!currentAuction || currentAuction.state === "completed") return;
     const interval = setInterval(async () => {
-      // Refresh auction state
       const res = await apiFetch(`/auctions/${currentAuction._id}`);
       if (res.ok) {
         const { auction } = await res.json();
         setCurrentAuction(auction);
       }
-      // Refresh players list
-      await loadPlayers();
-    }, 5000); // Refresh every 5 seconds
-
+    }, 5000);
     return () => clearInterval(interval);
-  }, [currentAuction?._id, currentAuction?.state, loadPlayers]);
+  }, [currentAuction?._id, currentAuction?.state]);
 
-  const createAuction = async () => {
-    if (!auctionName) {
+  const handleCsvUpload = (
+    e: React.ChangeEvent<HTMLInputElement>,
+    type: "teams" | "players"
+  ) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const text = event.target?.result as string;
+        const parsed = parseCSV(text);
+
+        if (parsed.length === 0) throw new Error("Empty file");
+
+        if (type === "teams") {
+          // Expected CSV Headers: Name, Wallet, Owner, Code, Captain Email
+          const mappedTeams = parsed.map((p) => ({
+            name:
+              p.name ||
+              p.team ||
+              p["team name"] ||
+              `Team ${Math.random().toString().substr(2, 4)}`,
+            wallet: Number(p.wallet || p.purse || p.budget || 10000000),
+            owner: p.owner || "Owner",
+            code:
+              p.code || p.shortcode || p.name?.substring(0, 3).toUpperCase(),
+            logo: p.logo || p.icon || "🏆",
+            captain: p.captain || p["captain name"],
+            // CRITICAL FIX: Map captain email correctly
+            captainEmail:
+              p.email ||
+              p["captain email"] ||
+              p["captain_email"] ||
+              p.captainemail ||
+              "",
+          }));
+          setTeamsData(mappedTeams);
+          toast({
+            title: "Teams Loaded",
+            description: `Found ${mappedTeams.length} teams`,
+          });
+        } else {
+          // Expected CSV Headers: Name, Role, BasePrice, Age
+          const mappedPlayers = parsed.map((p) => ({
+            name: p.name || p.player || "Unknown Player",
+            role: p.role || p.type || "All-Rounder",
+            basePrice: Number(
+              p.baseprice || p["base price"] || p.price || 1000
+            ),
+            age: Number(p.age || 25),
+            batsmanType:
+              p.batsmantype ||
+              p["batting style"] ||
+              p.batting ||
+              "Right-handed",
+            bowlerType:
+              p.bowlertype || p["bowling style"] || p.bowling || "None",
+            mobile: p.mobile || p.phone || p.contact,
+            email: p.email || p["email address"],
+            photo: p.photo || p.image || p.url,
+          }));
+          setPlayersData(mappedPlayers);
+          toast({
+            title: "Players Loaded",
+            description: `Found ${mappedPlayers.length} players`,
+          });
+        }
+      } catch (err) {
+        console.error(err);
+        toast({
+          title: "Error",
+          description: "Failed to parse CSV. Check format.",
+          variant: "destructive",
+        });
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const createAndStartAuction = async () => {
+    if (!auctionName || !teamsData || !playersData) return;
+    setLoading(true);
+
+    try {
+      const res = await apiFetch("/auctions", {
+        method: "POST",
+        body: JSON.stringify({
+          name: auctionName,
+          teams: teamsData,
+          players: playersData,
+        }),
+      });
+
+      if (res.ok) {
+        const { auction } = await res.json();
+        setCurrentAuction(auction);
+        toast({ title: "Success", description: "Auction initialized!" });
+      } else {
+        const err = await res.json();
+        toast({
+          title: "Error",
+          description: err.error,
+          variant: "destructive",
+        });
+      }
+    } catch (e) {
       toast({
         title: "Error",
-        description: "Please enter auction name",
+        description: "Failed to create auction",
         variant: "destructive",
       });
-      return;
-    }
-    setLoading(true);
-    const res = await apiFetch("/auctions", {
-      method: "POST",
-      body: JSON.stringify({ name: auctionName, players: [], teams: [] }),
-    });
-    if (res.ok) {
-      const { auction } = await res.json();
-      setCurrentAuction(auction);
-      setRoomCode(auction.roomCode);
-      setAuctions((a) => [auction, ...a]);
-      toast({
-        title: "Success",
-        description: `Auction created! Room code: ${auction.roomCode}`,
-      });
-    } else {
-      toast({ title: "Error", description: "Failed to create auction" });
     }
     setLoading(false);
   };
 
-  const copyRoomCode = () => {
-    if (roomCode) {
-      navigator.clipboard.writeText(roomCode);
-      toast({ title: "Copied!", description: "Room code copied to clipboard" });
-    }
-  };
+  const closeAndWipe = async () => {
+    if (!currentAuction) return;
+    setShowEndConfirm(false);
+    setLoading(true);
 
-  const scheduleAuction = () => {
-    if (!scheduleDate || !scheduleTime) {
+    try {
+      const res = await apiFetch(`/auctions/${currentAuction._id}/close`, {
+        method: "POST",
+      });
+      if (res.ok) {
+        const { report } = await res.json();
+
+        // --- FLATTEN REPORT FOR CSV ---
+        const flatReport: any[] = [];
+
+        // 1. Sold Players
+        report.teams.forEach((t: any) => {
+          t.Roster.forEach((p: any) => {
+            flatReport.push({
+              Status: "SOLD",
+              Team: t.TeamName,
+              Captain: t.Captain,
+              Player: p.Name,
+              Role: p.Role,
+              Mobile: p.Mobile || "",
+              Email: p.Email || "",
+              Price: p.Price,
+            });
+          });
+        });
+
+        // 2. Unsold Players
+        report.unsold.forEach((p: any) => {
+          flatReport.push({
+            Status: "UNSOLD",
+            Team: "-",
+            Captain: "-",
+            Player: p.Name,
+            Role: p.Role,
+            Mobile: p.Mobile || "",
+            Email: p.Email || "",
+            Price: 0,
+          });
+        });
+
+        // Convert to CSV
+        const csvContent = jsonToCSV(flatReport);
+        const blob = new Blob([csvContent], {
+          type: "text/csv;charset=utf-8;",
+        });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `Auction_Results_${auctionName.replace(/\s+/g, "_")}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+
+        setCurrentAuction(null);
+        setTeamsData(null);
+        setPlayersData(null);
+        setAuctionName("");
+
+        toast({
+          title: "Auction Closed",
+          description: "Results downloaded as CSV. Data erased.",
+        });
+      }
+    } catch (err) {
       toast({
         title: "Error",
-        description: "Please select date and time",
+        description: "Failed to close auction",
         variant: "destructive",
       });
-      return;
     }
-    toast({
-      title: "Auction Scheduled",
-      description: `Set for ${scheduleDate} at ${scheduleTime}`,
-    });
+    setLoading(false);
   };
 
   const startAuction = async () => {
-    if (!currentAuction) {
-      toast({
-        title: "Error",
-        description: "Please create an auction first",
-        variant: "destructive",
-      });
-      return;
-    }
+    if (!currentAuction) return;
     setLoading(true);
-    const res = await apiFetch(`/auctions/${currentAuction._id}/start`, {
-      method: "POST",
-    });
-    if (res.ok) {
-      const { auction } = await res.json();
-      setCurrentAuction(auction);
-      await loadPlayers(); // Refresh players list
-      toast({
-        title: "Auction Started!",
-        description: "First player automatically selected - bidding is live",
-      });
-    } else {
-      toast({ title: "Error", description: "Failed to start auction" });
-    }
+    await apiFetch(`/auctions/${currentAuction._id}/start`, { method: "POST" });
     setLoading(false);
   };
 
   const pauseAuction = async () => {
     if (!currentAuction) return;
     setLoading(true);
-    const res = await apiFetch(`/auctions/${currentAuction._id}/pause`, {
-      method: "POST",
-    });
-    if (res.ok) {
-      const { auction } = await res.json();
-      setCurrentAuction(auction);
-      toast({
-        title: "Auction Paused",
-        description: "Bidding is temporarily stopped",
-      });
-    } else {
-      toast({ title: "Error", description: "Failed to pause auction" });
-    }
+    await apiFetch(`/auctions/${currentAuction._id}/pause`, { method: "POST" });
     setLoading(false);
   };
 
   const resumeAuction = async () => {
     if (!currentAuction) return;
     setLoading(true);
-    const res = await apiFetch(`/auctions/${currentAuction._id}/resume`, {
+    await apiFetch(`/auctions/${currentAuction._id}/resume`, {
       method: "POST",
     });
-    if (res.ok) {
-      const { auction } = await res.json();
-      setCurrentAuction(auction);
-      toast({
-        title: "Auction Resumed",
-        description: "Bidding is now active again",
-      });
-    } else {
-      toast({ title: "Error", description: "Failed to resume auction" });
-    }
     setLoading(false);
   };
 
-  const closeAuction = async () => {
-    if (!currentAuction) return;
-    setShowEndConfirm(false);
-    setLoading(true);
-    const res = await apiFetch(`/auctions/${currentAuction._id}/close`, {
-      method: "POST",
-    });
-    if (res.ok) {
-      const { auction } = await res.json();
-      setCurrentAuction(null);
-      setRoomCode("");
-      toast({
-        title: "Auction Closed",
-        description:
-          "Auction has been ended. All participants have been notified.",
-      });
-    } else {
-      toast({ title: "Error", description: "Failed to close auction" });
+  const copyRoomCode = () => {
+    if (currentAuction?.roomCode) {
+      navigator.clipboard.writeText(currentAuction.roomCode);
+      toast({ title: "Copied!", description: "Room code copied" });
     }
-    setLoading(false);
   };
-
-  // Note: setCurrentPlayer is kept for manual override if needed, but auto-cycling is now primary
-  const setCurrentPlayer = async (playerId: string) => {
-    if (!currentAuction) return;
-    setLoading(true);
-    const res = await apiFetch(`/auctions/${currentAuction._id}/current`, {
-      method: "POST",
-      body: JSON.stringify({ playerId }),
-    });
-    if (res.ok) {
-      const { auction } = await res.json();
-      setCurrentAuction(auction);
-      await loadPlayers(); // Refresh players list
-      toast({
-        title: "Player Set",
-        description: "Current player updated - all clients notified",
-      });
-    } else {
-      toast({ title: "Error", description: "Failed to set current player" });
-    }
-    setLoading(false);
-  };
-
-  const auctionStatus = currentAuction?.state || "idle";
-  const auctionHistory = currentAuction?.sales || [];
 
   return (
-    <Tabs defaultValue="control" className="space-y-6">
-      <TabsList className="grid w-full max-w-md grid-cols-3">
-        <TabsTrigger value="control">Control</TabsTrigger>
-        <TabsTrigger value="settings">Settings</TabsTrigger>
-        <TabsTrigger value="history">History</TabsTrigger>
-      </TabsList>
-
-      <TabsContent value="control" className="space-y-6">
-        <div className="grid md:grid-cols-2 gap-6">
-          {/* Room Management */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Auction Room</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <Label>Auction Name</Label>
-                <Input
-                  value={auctionName}
-                  onChange={(e) => setAuctionName(e.target.value)}
-                  placeholder="Enter auction name"
-                />
-                <Button
-                  onClick={createAuction}
-                  disabled={loading || !auctionName}
-                  className="w-full"
-                >
-                  Create Auction
-                </Button>
-              </div>
-              <div className="space-y-2">
-                <Label>Room Code</Label>
-                <div className="flex gap-2">
-                  <Input
-                    value={roomCode}
-                    readOnly
-                    placeholder="Create auction first"
-                    className="font-mono text-2xl text-center tracking-wider"
-                  />
-                  <Button
-                    onClick={copyRoomCode}
-                    size="icon"
-                    variant="outline"
-                    disabled={!roomCode}
-                  >
-                    <Copy className="w-4 h-4" />
-                  </Button>
-                </div>
-                <p className="text-sm text-muted-foreground">
-                  Share this code with captains and players
-                </p>
-              </div>
-
-              <div className="space-y-2">
-                <Label>Status</Label>
-                <div className="flex items-center gap-2">
-                  <div
-                    className={`w-3 h-3 rounded-full ${
-                      auctionStatus === "active"
-                        ? "bg-green-500"
-                        : auctionStatus === "paused"
-                        ? "bg-yellow-500"
-                        : "bg-gray-500"
-                    }`}
-                  />
-                  <span className="font-medium capitalize">
-                    {auctionStatus}
-                  </span>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Schedule */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Schedule Auction</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="date">
-                  <Calendar className="w-4 h-4 inline mr-2" />
-                  Date
-                </Label>
-                <Input
-                  id="date"
-                  type="date"
-                  value={scheduleDate}
-                  onChange={(e) => setScheduleDate(e.target.value)}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="time">
-                  <Clock className="w-4 h-4 inline mr-2" />
-                  Time
-                </Label>
-                <Input
-                  id="time"
-                  type="time"
-                  value={scheduleTime}
-                  onChange={(e) => setScheduleTime(e.target.value)}
-                />
-              </div>
-              <Button onClick={scheduleAuction} className="w-full">
-                Schedule Auction
-              </Button>
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* Auction Controls */}
-        <Card>
+    <div className="space-y-6">
+      {!currentAuction ? (
+        // STATE 1: SETUP
+        <Card className="border-amber-500/30 bg-[#1a2332]">
           <CardHeader>
-            <CardTitle>Live Auction Controls</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              {auctionStatus === "draft" && (
-                <Button
-                  onClick={startAuction}
-                  disabled={loading}
-                  className="w-full bg-green-600 hover:bg-green-700"
-                >
-                  <Play className="w-4 h-4 mr-2" />
-                  Start Auction
-                </Button>
-              )}
-              {auctionStatus === "active" && (
-                <Button
-                  onClick={pauseAuction}
-                  disabled={loading}
-                  className="w-full bg-yellow-600 hover:bg-yellow-700"
-                >
-                  <Pause className="w-4 h-4 mr-2" />
-                  Pause
-                </Button>
-              )}
-              {auctionStatus === "paused" && (
-                <Button
-                  onClick={resumeAuction}
-                  disabled={loading}
-                  className="w-full bg-green-600 hover:bg-green-700"
-                >
-                  <Play className="w-4 h-4 mr-2" />
-                  Resume
-                </Button>
-              )}
-              <Button
-                variant="destructive"
-                disabled={
-                  auctionStatus === "idle" || !currentAuction || loading
-                }
-                onClick={() => setShowEndConfirm(true)}
-              >
-                End Auction
-              </Button>
-
-              <AlertDialog
-                open={showEndConfirm}
-                onOpenChange={setShowEndConfirm}
-              >
-                <AlertDialogContent>
-                  <AlertDialogHeader>
-                    <AlertDialogTitle>End Auction?</AlertDialogTitle>
-                    <AlertDialogDescription>
-                      Are you sure you want to end this auction? This action
-                      cannot be undone. All participants will be automatically
-                      redirected to the auction joining page.
-                    </AlertDialogDescription>
-                  </AlertDialogHeader>
-                  <AlertDialogFooter>
-                    <AlertDialogCancel>Cancel</AlertDialogCancel>
-                    <AlertDialogAction
-                      onClick={closeAuction}
-                      className="bg-red-600 hover:bg-red-700"
-                    >
-                      Yes, End Auction
-                    </AlertDialogAction>
-                  </AlertDialogFooter>
-                </AlertDialogContent>
-              </AlertDialog>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Current Player Info */}
-        {currentAuction &&
-          (auctionStatus === "active" || auctionStatus === "paused") && (
-            <Card>
-              <CardHeader>
-                <CardTitle>Current Player Status</CardTitle>
-              </CardHeader>
-              <CardContent>
-                {currentAuction.currentPlayerId ? (
-                  <div className="text-center py-4">
-                    <p className="text-lg font-semibold text-green-600">
-                      ✓ Player is currently being auctioned
-                    </p>
-                    <p className="text-sm text-muted-foreground mt-2">
-                      Players will automatically advance after each sale
-                    </p>
-                  </div>
-                ) : (
-                  <div className="text-center py-4">
-                    <p className="text-lg font-semibold text-amber-600">
-                      No current player - All players sold or auction completed
-                    </p>
-                  </div>
-                )}
-                {allPlayers.length > 0 && (
-                  <div className="mt-4 text-sm text-muted-foreground">
-                    <p>
-                      Remaining unsold players:{" "}
-                      <strong>{allPlayers.length}</strong>
-                    </p>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          )}
-
-        {/* Current Stats */}
-        <div className="grid md:grid-cols-4 gap-4">
-          <Card>
-            <CardContent className="pt-6">
-              <div className="text-2xl font-bold text-accent">5</div>
-              <p className="text-sm text-muted-foreground">Active Teams</p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-6">
-              <div className="text-2xl font-bold text-accent">12</div>
-              <p className="text-sm text-muted-foreground">Players Sold</p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-6">
-              <div className="text-2xl font-bold text-accent">$145K</div>
-              <p className="text-sm text-muted-foreground">Total Spent</p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-6">
-              <div className="text-2xl font-bold text-accent">38</div>
-              <p className="text-sm text-muted-foreground">Remaining Players</p>
-            </CardContent>
-          </Card>
-        </div>
-      </TabsContent>
-
-      <TabsContent value="settings" className="space-y-6">
-        <Card>
-          <CardHeader>
-            <CardTitle>
-              <Settings className="w-5 h-5 inline mr-2" />
-              Auction Settings
-            </CardTitle>
+            <CardTitle className="text-white">New Auction Session</CardTitle>
+            <CardDescription className="text-gray-400">
+              Upload your Excel/CSV lists to start.
+            </CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
-            <div className="grid md:grid-cols-2 gap-6">
-              <div className="space-y-2">
-                <Label htmlFor="bidIncrement">Bid Increment ($)</Label>
-                <Select value={bidIncrement} onValueChange={setBidIncrement}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="500">$500</SelectItem>
-                    <SelectItem value="1000">$1,000</SelectItem>
-                    <SelectItem value="2000">$2,000</SelectItem>
-                    <SelectItem value="5000">$5,000</SelectItem>
-                  </SelectContent>
-                </Select>
+            <div className="space-y-2">
+              <Label className="text-white">Tournament Name</Label>
+              <Input
+                value={auctionName}
+                onChange={(e) => setAuctionName(e.target.value)}
+                placeholder="e.g. Premier League 2025"
+                className="bg-[#0f1419] border-white/20 text-white"
+              />
+            </div>
+
+            <div className="grid md:grid-cols-2 gap-4">
+              {/* Teams Upload */}
+              <div
+                className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors ${
+                  teamsData
+                    ? "border-green-500/50 bg-green-500/10"
+                    : "border-white/20 hover:border-amber-500/50"
+                }`}
+              >
+                <Input
+                  type="file"
+                  accept=".csv"
+                  onChange={(e) => handleCsvUpload(e, "teams")}
+                  className="hidden"
+                  id="teams-upload"
+                />
+                <Label
+                  htmlFor="teams-upload"
+                  className="cursor-pointer flex flex-col items-center gap-2"
+                >
+                  <Trophy
+                    className={`w-8 h-8 ${
+                      teamsData ? "text-green-500" : "text-amber-500"
+                    }`}
+                  />
+                  <span className="text-white font-bold">
+                    1. Upload Teams CSV
+                  </span>
+                  <span className="text-xs text-gray-400">
+                    Columns: Name, Wallet, Logo, Captain Email
+                  </span>
+                  {teamsData && (
+                    <span className="text-green-400 text-xs font-bold">
+                      Loaded {teamsData.length} Teams
+                    </span>
+                  )}
+                </Label>
               </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="timerDuration">Timer Duration (seconds)</Label>
-                <Select value={timerDuration} onValueChange={setTimerDuration}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="15">15 seconds</SelectItem>
-                    <SelectItem value="30">30 seconds</SelectItem>
-                    <SelectItem value="45">45 seconds</SelectItem>
-                    <SelectItem value="60">60 seconds</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="minPlayers">Min Players per Team</Label>
-                <Input id="minPlayers" type="number" defaultValue="11" />
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="maxPlayers">Max Players per Team</Label>
-                <Input id="maxPlayers" type="number" defaultValue="15" />
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="baseBid">Default Base Bid ($)</Label>
-                <Input id="baseBid" type="number" defaultValue="5000" />
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="maxBid">Maximum Bid Limit ($)</Label>
-                <Input id="maxBid" type="number" defaultValue="50000" />
+              {/* Players Upload */}
+              <div
+                className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors ${
+                  playersData
+                    ? "border-green-500/50 bg-green-500/10"
+                    : "border-white/20 hover:border-amber-500/50"
+                }`}
+              >
+                <Input
+                  type="file"
+                  accept=".csv"
+                  onChange={(e) => handleCsvUpload(e, "players")}
+                  className="hidden"
+                  id="players-upload"
+                />
+                <Label
+                  htmlFor="players-upload"
+                  className="cursor-pointer flex flex-col items-center gap-2"
+                >
+                  <Users
+                    className={`w-8 h-8 ${
+                      playersData ? "text-green-500" : "text-amber-500"
+                    }`}
+                  />
+                  <span className="text-white font-bold">
+                    2. Upload Players CSV
+                  </span>
+                  <span className="text-xs text-gray-400">
+                    Cols: Name, Role, Price, Phone, Email
+                  </span>
+                  {playersData && (
+                    <span className="text-green-400 text-xs font-bold">
+                      Loaded {playersData.length} Players
+                    </span>
+                  )}
+                </Label>
               </div>
             </div>
 
-            <Button className="w-full">Save Settings</Button>
+            <Button
+              onClick={createAndStartAuction}
+              disabled={!auctionName || !teamsData || !playersData || loading}
+              className="w-full bg-amber-500 hover:bg-amber-600 text-black font-bold h-12 text-lg"
+            >
+              {loading ? "Initializing..." : "Create Auction Room"}
+            </Button>
           </CardContent>
         </Card>
-      </TabsContent>
-
-      <TabsContent value="history" className="space-y-6">
-        <Card>
-          <CardHeader>
-            <CardTitle>
-              <History className="w-5 h-5 inline mr-2" />
-              Auction History
-            </CardTitle>
+      ) : (
+        // STATE 2: ACTIVE AUCTION
+        <Card className="border-green-500/30 bg-[#1a2332]">
+          <CardHeader className="flex flex-row items-center justify-between border-b border-white/10 pb-6">
+            <div>
+              <CardTitle className="text-white text-2xl">
+                {currentAuction.name}
+              </CardTitle>
+              <div className="flex items-center gap-2 mt-2">
+                <div
+                  className={`w-2.5 h-2.5 rounded-full ${
+                    currentAuction.state === "active"
+                      ? "bg-green-500 animate-pulse"
+                      : "bg-yellow-500"
+                  }`}
+                />
+                <span className="text-sm text-gray-300 capitalize">
+                  {currentAuction.state}
+                </span>
+              </div>
+            </div>
+            <div className="text-right">
+              <p className="text-gray-400 text-xs uppercase tracking-wider mb-1">
+                Room Code
+              </p>
+              <div className="flex items-center gap-2 bg-[#0f1419] px-3 py-1.5 rounded border border-white/10">
+                <span className="text-2xl font-mono text-amber-500 font-bold tracking-widest">
+                  {currentAuction.roomCode}
+                </span>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="h-8 w-8 hover:bg-white/10"
+                  onClick={copyRoomCode}
+                >
+                  <Copy className="w-4 h-4 text-white" />
+                </Button>
+              </div>
+            </div>
           </CardHeader>
-          <CardContent>
-            <div className="space-y-3">
-              {auctionHistory.length === 0 ? (
-                <div className="text-muted-foreground p-4 text-center">
-                  No sales yet
-                </div>
+          <CardContent className="space-y-8 pt-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {currentAuction.state === "draft" ? (
+                <Button
+                  onClick={startAuction}
+                  className="bg-green-600 hover:bg-green-700 h-20 text-xl font-bold shadow-lg shadow-green-900/20"
+                >
+                  <Play className="w-6 h-6 mr-3 fill-current" /> Start Auction
+                </Button>
+              ) : currentAuction.state === "paused" ? (
+                <Button
+                  onClick={resumeAuction}
+                  className="bg-green-600 hover:bg-green-700 h-20 text-xl font-bold"
+                >
+                  <Play className="w-6 h-6 mr-3 fill-current" /> Resume
+                </Button>
               ) : (
-                auctionHistory.map((item: any, index: number) => (
-                  <div
-                    key={index}
-                    className="flex items-center justify-between p-4 bg-muted rounded-lg"
-                  >
-                    <div className="flex-1">
-                      <p className="font-semibold">
-                        Player ID: {item.playerId}
-                      </p>
-                      <p className="text-sm text-muted-foreground">
-                        Team ID: {item.teamId}
-                      </p>
-                    </div>
-                    <div className="text-right">
-                      <p className="font-bold text-accent">
-                        ${item.price?.toLocaleString()}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        {new Date(item.at).toLocaleTimeString()}
-                      </p>
-                    </div>
-                  </div>
-                ))
+                <Button
+                  onClick={pauseAuction}
+                  className="bg-yellow-600 hover:bg-yellow-700 h-20 text-xl font-bold text-black"
+                >
+                  <Pause className="w-6 h-6 mr-3 fill-current" /> Pause
+                </Button>
               )}
+
+              <Button
+                onClick={() => setShowEndConfirm(true)}
+                variant="destructive"
+                className="h-20 text-xl border-2 border-red-900/50 hover:bg-red-900/40 bg-transparent text-red-500 hover:text-red-400"
+              >
+                <div className="flex flex-col items-center">
+                  <span className="flex items-center font-bold">
+                    <FileSpreadsheet className="w-5 h-5 mr-2" /> End & Download
+                    CSV
+                  </span>
+                  <span className="text-xs font-normal opacity-70 mt-1">
+                    Saves results & resets data
+                  </span>
+                </div>
+              </Button>
+            </div>
+
+            <div className="grid grid-cols-3 gap-4">
+              <div className="bg-[#0f1419] p-4 rounded-lg border border-white/10 text-center">
+                <div className="text-3xl font-bold text-green-500 mb-1">
+                  {(currentAuction.sales || []).length}
+                </div>
+                <div className="text-xs text-gray-400 uppercase tracking-wider">
+                  Sold
+                </div>
+              </div>
+              <div className="bg-[#0f1419] p-4 rounded-lg border border-white/10 text-center">
+                <div className="text-3xl font-bold text-amber-500 mb-1">
+                  {(currentAuction.unsoldPlayers || []).length}
+                </div>
+                <div className="text-xs text-gray-400 uppercase tracking-wider">
+                  Unsold
+                </div>
+              </div>
+              <div className="bg-[#0f1419] p-4 rounded-lg border border-white/10 text-center">
+                <div className="text-3xl font-bold text-blue-500 mb-1">
+                  $
+                  {(currentAuction.sales || [])
+                    .reduce((acc: number, s: any) => acc + s.price, 0)
+                    .toLocaleString()}
+                </div>
+                <div className="text-xs text-gray-400 uppercase tracking-wider">
+                  Total Spent
+                </div>
+              </div>
             </div>
           </CardContent>
         </Card>
-      </TabsContent>
-    </Tabs>
+      )}
+
+      {/* Confirmation Dialog */}
+      <AlertDialog open={showEndConfirm} onOpenChange={setShowEndConfirm}>
+        <AlertDialogContent className="bg-[#1a2332] border-red-500/50 text-white">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2 text-red-500 text-xl">
+              <AlertTriangle className="w-6 h-6" />
+              End Auction & Erase Data?
+            </AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="text-gray-300 text-base mt-2">
+                You are about to close this session.
+                <ul className="list-disc pl-5 mt-3 space-y-1 text-sm text-gray-400">
+                  <li>
+                    A <strong>CSV file</strong> with all sold/unsold players
+                    will be downloaded.
+                  </li>
+                  <li>
+                    All <strong>Players</strong> and <strong>Teams</strong> data
+                    will be{" "}
+                    <span className="text-red-400 font-bold">
+                      PERMANENTLY DELETED
+                    </span>
+                    .
+                  </li>
+                  <li>The room code will become invalid.</li>
+                </ul>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="mt-4">
+            <AlertDialogCancel className="bg-transparent border-white/20 text-white hover:bg-white/10">
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={closeAndWipe}
+              className="bg-red-600 hover:bg-red-700 text-white font-bold"
+            >
+              Download CSV & Wipe
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
   );
 };
 

@@ -6,6 +6,7 @@ import {
   refresh,
   logout,
   debugUser,
+  verifyOtp, // Added import
 } from "../../controllers/auth.controller.js";
 import { requireAuth } from "../../middleware/auth.js";
 
@@ -13,6 +14,7 @@ const router = Router();
 
 router.post("/signup", signup);
 router.post("/login", login);
+router.post("/verify-otp", verifyOtp); // Added route
 // Dev-only: inspect user record
 router.get("/debug/user", async (req, res, next) => {
   try {

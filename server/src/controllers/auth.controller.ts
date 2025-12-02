@@ -3,7 +3,6 @@ import type { Request, Response } from "express";
 import Joi from "joi";
 import bcrypt from "bcryptjs";
 import { User } from "../models/User.js";
-import { Team } from "../models/Team.js";
 import {
   comparePassword,
   hashPassword,
@@ -14,7 +13,8 @@ import {
   compareRefreshToken,
 } from "../utils/auth.js";
 
-// Signup allows 'admin' or 'player' roles from UI; captains must be promoted by admin.
+// --- VALIDATION SCHEMAS ---
+
 const signupSchema = Joi.object({
   email: Joi.string().email().required(),
   password: Joi.string().min(8).required(),
@@ -22,12 +22,22 @@ const signupSchema = Joi.object({
   role: Joi.string().valid("admin", "player").default("player"),
 });
 
-// (OTP verification removed — signup creates user immediately)
+const verifyOtpSchema = Joi.object({
+  email: Joi.string().email().required(),
+  otp: Joi.string().length(6).required(),
+});
+
+const loginSchema = Joi.object({
+  email: Joi.string().email().required(),
+  password: Joi.string().required(),
+});
+
+// --- HELPER FUNCTIONS ---
 
 async function sendOtpEmail(email: string, otp: string) {
   const message = `Your verification code is ${otp}. It will expire in 10 minutes.`;
 
-  // Prefer EmailJS if configured
+  // Prefer EmailJS if configured in .env
   const emailJsService = process.env.EMAILJS_SERVICE_ID;
   const emailJsTemplate = process.env.EMAILJS_TEMPLATE_ID;
   const emailJsUser =
@@ -50,88 +60,133 @@ async function sendOtpEmail(email: string, otp: string) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      const text = await res.text().catch(() => "");
-      if (!res.ok) {
-        console.error(
-          `EmailJS send failed: status=${res.status} body=${text} for email=${email}`
-        );
+
+      if (res.ok) {
+        console.info(`EmailJS send OK for ${email}`);
+        return;
       } else {
-        console.info(`EmailJS send OK for ${email}: ${text}`);
+        console.error(`EmailJS failed: ${await res.text()}`);
       }
-      return;
     } catch (err) {
       console.error("Failed to send OTP via EmailJS", err);
-      // fall through to logging
     }
   }
 
-  // Fallback: log OTP to server logs for development / manual delivery.
-  console.info(`OTP for ${email}: ${otp}`);
+  // Fallback: Log OTP to console (for localhost development)
+  console.info(`[DEV] OTP for ${email}: ${otp}`);
 }
 
-const loginSchema = Joi.object({
-  email: Joi.string().email().required(),
-  password: Joi.string().required(),
-});
-
 function setRefreshCookie(res: Response, token: string) {
-  // Determine if we are in production
-  const isProduction = process.env.NODE_ENV === "production";
-
+  const isProd = process.env.NODE_ENV === "production";
   res.cookie("rt", token, {
     httpOnly: true,
-    // MUST be true for cross-site cookies to work (Vercel -> Render)
-    secure: true,
-    // MUST be 'none' to allow cross-site usage
-    sameSite: "none",
+    secure: isProd ? true : false,
+    sameSite: isProd ? "none" : "lax",
     path: "/api/v1/auth",
     maxAge: 7 * 24 * 60 * 60 * 1000,
   });
 }
+
+// --- CONTROLLERS ---
 
 export async function signup(req: Request, res: Response) {
   const { error, value } = signupSchema.validate(req.body);
   if (error)
     return res.status(StatusCodes.BAD_REQUEST).json({ error: error.message });
 
-  // Check existing active users
-  const existing = await User.findOne({ email: value.email });
-  if (existing)
+  // Check if user exists
+  let user = await User.findOne({ email: value.email });
+  if (user && user.emailVerified) {
     return res
       .status(StatusCodes.CONFLICT)
       .json({ error: "Email already registered" });
+  }
 
   const passwordHash = await hashPassword(value.password);
 
-  // Generate OTP and persist hashed OTP on the user record.
+  // Generate OTP
   const otp = Math.floor(100000 + Math.random() * 900000).toString();
   const otpHash = await bcrypt.hash(otp, 10);
   const otpExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
-  // Create user immediately (no OTP required)
-  const created = await User.create({
-    email: value.email,
-    passwordHash,
-    name: value.name,
-    role: value.role || "player",
-    emailVerified: true,
-  });
+  if (!user) {
+    // Create new unverified user
+    user = await User.create({
+      email: value.email,
+      passwordHash,
+      name: value.name,
+      role: value.role || "player",
+      emailVerified: false,
+      otpHash,
+      otpExpires,
+    });
+  } else {
+    // Overwrite unverified user with new details
+    user.passwordHash = passwordHash;
+    user.name = value.name;
+    user.role = value.role || "player";
+    user.otpHash = otpHash;
+    user.otpExpires = otpExpires;
+    await user.save();
+  }
 
-  // Issue tokens and return user (log them in)
-  const at = signAccessToken({ sub: created.id, role: created.role });
-  const rt = signRefreshToken({ sub: created.id });
-  created.refreshTokenHash = await hashRefreshToken(rt);
-  await created.save();
+  // Send the OTP
+  await sendOtpEmail(user.email, otp);
+
+  // IMPORTANT: Do NOT send tokens yet. User must verify OTP first.
+  return res.status(StatusCodes.OK).json({
+    message: "OTP sent to your email. Please verify to complete signup.",
+  });
+}
+
+export async function verifyOtp(req: Request, res: Response) {
+  const { error, value } = verifyOtpSchema.validate(req.body);
+  if (error)
+    return res.status(StatusCodes.BAD_REQUEST).json({ error: error.message });
+
+  const user = await User.findOne({ email: value.email });
+  if (!user)
+    return res.status(StatusCodes.NOT_FOUND).json({ error: "User not found" });
+
+  if (user.emailVerified) {
+    return res
+      .status(StatusCodes.BAD_REQUEST)
+      .json({ error: "User already verified" });
+  }
+
+  // Check Expiry
+  if (!user.otpHash || !user.otpExpires || user.otpExpires < new Date()) {
+    return res
+      .status(StatusCodes.BAD_REQUEST)
+      .json({ error: "OTP expired or invalid" });
+  }
+
+  // Check OTP Match
+  const validOtp = await bcrypt.compare(value.otp, user.otpHash);
+  if (!validOtp)
+    return res.status(StatusCodes.BAD_REQUEST).json({ error: "Invalid OTP" });
+
+  // Success: Mark verified & Clean up
+  user.emailVerified = true;
+  user.otpHash = undefined;
+  user.otpExpires = undefined;
+
+  // Issue Tokens (Login the user)
+  const at = signAccessToken({ sub: user.id, role: user.role });
+  const rt = signRefreshToken({ sub: user.id });
+  user.refreshTokenHash = await hashRefreshToken(rt);
+
+  await user.save();
   setRefreshCookie(res, rt);
 
-  return res.status(StatusCodes.CREATED).json({
+  return res.status(StatusCodes.OK).json({
     accessToken: at,
     user: {
-      id: created.id,
-      email: created.email,
-      name: created.name,
-      role: created.role,
-      teamId: created.teamId,
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      role: user.role,
+      teamId: user.teamId,
     },
   });
 }
@@ -147,6 +202,14 @@ export async function login(req: Request, res: Response) {
       .status(StatusCodes.UNAUTHORIZED)
       .json({ error: "Invalid credentials" });
 
+  // Block login if not verified
+  if (!user.emailVerified) {
+    return res.status(StatusCodes.FORBIDDEN).json({
+      error:
+        "Email not verified. Please check your email for the OTP or signup again to resend it.",
+    });
+  }
+
   const ok = await comparePassword(value.password, user.passwordHash);
   if (!ok)
     return res
@@ -158,6 +221,7 @@ export async function login(req: Request, res: Response) {
   user.refreshTokenHash = await hashRefreshToken(rt);
   await user.save();
   setRefreshCookie(res, rt);
+
   return res.status(StatusCodes.OK).json({
     accessToken: at,
     user: {
@@ -169,8 +233,6 @@ export async function login(req: Request, res: Response) {
     },
   });
 }
-
-// (OTP verification removed)
 
 export async function me(
   req: Request & { user?: { id: string; role: string } },
@@ -192,7 +254,6 @@ export async function me(
   });
 }
 
-// Dev helper: return user document by email (only in non-production)
 export async function debugUser(req: Request, res: Response) {
   if (process.env.NODE_ENV === "production") {
     return res
@@ -207,7 +268,6 @@ export async function debugUser(req: Request, res: Response) {
   const user = await User.findOne({ email }).lean();
   if (!user)
     return res.status(StatusCodes.NOT_FOUND).json({ error: "User not found" });
-  // Return key fields including hashed password for debugging
   return res.status(StatusCodes.OK).json({
     id: user._id,
     email: user.email,
@@ -215,6 +275,7 @@ export async function debugUser(req: Request, res: Response) {
     role: user.role,
     emailVerified: user.emailVerified,
     passwordHash: user.passwordHash,
+    otpHash: user.otpHash,
   });
 }
 
@@ -243,7 +304,6 @@ export async function refresh(req: Request, res: Response) {
       .status(StatusCodes.UNAUTHORIZED)
       .json({ error: "Invalid session" });
 
-  // rotate refresh token
   const newRt = signRefreshToken({ sub: user.id });
   user.refreshTokenHash = await hashRefreshToken(newRt);
   await user.save();

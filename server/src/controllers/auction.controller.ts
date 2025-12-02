@@ -1,8 +1,6 @@
 import type { Request, Response } from "express";
 import { StatusCodes } from "http-status-codes";
 import Joi from "joi";
-import mongoose from "mongoose";
-import { nanoid } from "nanoid";
 import { Auction } from "../models/Auction.js";
 import { Player } from "../models/Player.js";
 import { Team } from "../models/Team.js";
@@ -15,16 +13,65 @@ import {
   initAuctionQueue,
 } from "../utils/timer.js";
 
-const createSchema = Joi.object({
+// --- VALIDATION SCHEMAS ---
+
+const importSchema = Joi.object({
   name: Joi.string().min(2).required(),
-  players: Joi.array().items(Joi.string()).default([]),
-  teams: Joi.array().items(Joi.string()).default([]),
+  teams: Joi.array()
+    .items(
+      Joi.object({
+        name: Joi.string().required(),
+        wallet: Joi.number().required(),
+        logo: Joi.string().optional().allow(null, ""),
+        owner: Joi.string().optional().allow(null, ""),
+        code: Joi.alternatives()
+          .try(Joi.string(), Joi.number())
+          .optional()
+          .allow(null, ""),
+        captain: Joi.string().optional().allow(null, ""),
+        captainEmail: Joi.string().email().optional().allow(null, ""),
+      })
+    )
+    .min(2)
+    .required(),
+  players: Joi.array()
+    .items(
+      Joi.object({
+        name: Joi.string().required(),
+        role: Joi.string().required(),
+        basePrice: Joi.number().required(),
+        photo: Joi.string().optional().allow(null, ""),
+        age: Joi.number().optional().allow(null),
+        batsmanType: Joi.string().optional().allow(null, ""),
+        bowlerType: Joi.string().optional().allow(null, ""),
+        mobile: Joi.alternatives()
+          .try(Joi.string(), Joi.number())
+          .optional()
+          .allow(null, ""),
+        email: Joi.string().optional().allow(null, ""),
+      })
+    )
+    .min(1)
+    .required(),
 });
+
+const bidSchema = Joi.object({
+  teamId: Joi.string().required(),
+  amount: Joi.number().min(0).required(),
+  playerId: Joi.string().optional(),
+});
+
+const currentPlayerSchema = Joi.object({
+  playerId: Joi.string().required(),
+});
+
+const pendingBids = new Map<string, Promise<any>>();
+
+// --- CONTROLLERS ---
 
 export async function listAuctions(req: Request, res: Response) {
   const { roomCode } = req.query as { roomCode?: string };
   const filter = roomCode ? { roomCode } : {};
-  // OPTIMIZATION: Fetch timer fields so client clock starts immediately
   const auctions = await Auction.find(filter)
     .select(
       "name roomCode state currentPlayerId currentBid createdAt timerEndsAt timerDuration"
@@ -38,23 +85,78 @@ export async function createAuction(
   req: Request & { user?: { id: string } },
   res: Response
 ) {
-  const { error, value } = createSchema.validate(req.body);
+  const { error, value } = importSchema.validate(req.body);
   if (error)
     return res.status(StatusCodes.BAD_REQUEST).json({ error: error.message });
 
-  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-  let roomCode = "";
-  for (let i = 0; i < 6; i++) {
-    roomCode += alphabet.charAt(Math.floor(Math.random() * alphabet.length));
+  try {
+    // 1. Create Teams
+    const teamsToInsert = value.teams.map((t: any) => ({
+      ...t,
+      // Ensure code is string if it was a number
+      code: t.code ? String(t.code) : undefined,
+      wallet: t.wallet || 1000000,
+    }));
+    const createdTeams = await Team.insertMany(teamsToInsert);
+    const teamIds = createdTeams.map((t) => t._id);
+
+    // 2. Link Captains
+    let linkedCaptains = 0;
+    for (let i = 0; i < value.teams.length; i++) {
+      const inputTeam = value.teams[i];
+      const newTeam = createdTeams[i];
+
+      if (inputTeam.captainEmail) {
+        const user = await User.findOne({ email: inputTeam.captainEmail });
+        if (user) {
+          user.teamId = (newTeam as any)._id.toString();
+          user.role = "captain";
+          await user.save();
+
+          newTeam.captainId = (user as any)._id.toString();
+          newTeam.captain = user.name;
+          await newTeam.save();
+          linkedCaptains++;
+        }
+      }
+    }
+
+    // 3. Create Players
+    const playersToInsert = value.players.map((p: any) => ({
+      ...p,
+      // Ensure mobile is string if it was a number
+      mobile: p.mobile ? String(p.mobile) : undefined,
+      teamId: "UNSOLD",
+    }));
+    const createdPlayers = await Player.insertMany(playersToInsert);
+    const playerIds = createdPlayers.map((p) => p._id);
+
+    // 4. Create Auction
+    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    let roomCode = "";
+    for (let i = 0; i < 6; i++) {
+      roomCode += alphabet.charAt(Math.floor(Math.random() * alphabet.length));
+    }
+
+    const auction = await Auction.create({
+      name: value.name,
+      players: playerIds,
+      teams: teamIds,
+      roomCode,
+      createdBy: req.user?.id || "system",
+      state: "draft",
+    });
+
+    return res.status(StatusCodes.CREATED).json({
+      auction,
+      message: `Imported ${createdTeams.length} teams (${linkedCaptains} captains linked) and ${createdPlayers.length} players.`,
+    });
+  } catch (err: any) {
+    console.error("Import failed:", err);
+    return res
+      .status(StatusCodes.INTERNAL_SERVER_ERROR)
+      .json({ error: "Failed to import data" });
   }
-  const auction = await Auction.create({
-    name: value.name,
-    players: value.players,
-    teams: value.teams,
-    roomCode,
-    createdBy: req.user?.id || "system",
-  });
-  return res.status(StatusCodes.CREATED).json({ auction });
 }
 
 export async function getAuction(req: Request, res: Response) {
@@ -79,46 +181,27 @@ export async function startAuction(req: Request, res: Response) {
       .status(StatusCodes.NOT_FOUND)
       .json({ error: "Auction not found" });
 
-  try {
-    await initAuctionQueue(id);
-    const queue =
-      (await import("../utils/timer.js")).auctionPlayerQueues.get(id) || [];
-    const nextPlayerId = queue.shift();
-    (await import("../utils/timer.js")).auctionPlayerQueues.set(id, queue);
+  await initAuctionQueue(id);
+  const queue =
+    (await import("../utils/timer.js")).auctionPlayerQueues.get(id) || [];
+  const nextPlayerId = queue.shift();
+  (await import("../utils/timer.js")).auctionPlayerQueues.set(id, queue);
 
-    if (nextPlayerId) {
-      auction.currentPlayerId = nextPlayerId;
-      auction.currentBid = undefined;
-      auction.skippedTeams = [];
-      await auction.save();
+  if (nextPlayerId) {
+    auction.currentPlayerId = nextPlayerId;
+    auction.currentBid = undefined;
+    auction.skippedTeams = [];
+    await auction.save();
+    await startAuctionTimer(id, auction.roomCode);
 
-      await startAuctionTimer(id, auction.roomCode);
-
-      try {
-        const p = await Player.findById(nextPlayerId).select(
-          "_id name photo age role bowlerType basePrice"
-        );
-        const io = getIO();
-        io.to(auction.roomCode).emit("auction:player_changed", {
-          playerId: nextPlayerId,
-          player: {
-            id: nextPlayerId,
-            name: p?.name || "Player",
-            photo: p?.photo || "",
-            age: p?.age || 25,
-            role: p?.role || "",
-            bowlerType: p?.bowlerType || "",
-            basePrice: p?.basePrice || 1000,
-          },
-        });
-      } catch (err) {
-        console.error("Error broadcasting player_changed:", err);
-      }
-    }
-  } catch (err) {
-    console.error("Failed to initialize auction queue:", err);
+    const p = await Player.findById(nextPlayerId).lean();
+    getIO()
+      .to(auction.roomCode)
+      .emit("auction:player_changed", {
+        playerId: nextPlayerId,
+        player: { ...p, id: p?._id },
+      });
   }
-
   return res.status(StatusCodes.OK).json({ auction });
 }
 
@@ -133,9 +216,7 @@ export async function pauseAuction(req: Request, res: Response) {
     return res
       .status(StatusCodes.NOT_FOUND)
       .json({ error: "Auction not found" });
-
   stopAuctionTimer(id);
-
   return res.status(StatusCodes.OK).json({ auction });
 }
 
@@ -163,55 +244,25 @@ export async function resumeAuction(req: Request, res: Response) {
         { teamId: "UNSOLD" },
       ],
       _id: { $nin: [...soldPlayerIds, ...(auction.unsoldPlayers || [])] },
-    })
-      .select("_id name photo age role bowlerType basePrice teamId")
-      .sort({ _id: 1 });
+    }).sort({ _id: 1 });
 
     if (nextUnsoldPlayer) {
-      const playerId =
-        nextUnsoldPlayer.id || (nextUnsoldPlayer as any)._id.toString();
-      if (
-        !soldPlayerIds.includes(playerId) &&
-        !auction.unsoldPlayers?.includes(playerId)
-      ) {
-        auction.currentPlayerId = playerId;
-        auction.currentBid = undefined;
-        auction.skippedTeams = [];
-        await auction.save();
+      const playerId = (nextUnsoldPlayer as any)._id.toString();
+      auction.currentPlayerId = playerId;
+      auction.currentBid = undefined;
+      auction.skippedTeams = [];
+      await auction.save();
+      await startAuctionTimer(id, auction.roomCode);
 
-        await startAuctionTimer(id, auction.roomCode);
-
-        try {
-          const io = getIO();
-          io.to(auction.roomCode).emit("auction:player_changed", {
-            playerId: playerId,
-            player: {
-              id: playerId,
-              name: nextUnsoldPlayer.name,
-              photo: nextUnsoldPlayer.photo || "",
-              age: nextUnsoldPlayer.age || 25,
-              role: nextUnsoldPlayer.role || "",
-              bowlerType: nextUnsoldPlayer.bowlerType || "",
-              basePrice: nextUnsoldPlayer.basePrice || 1000,
-            },
-          });
-        } catch (err) {
-          console.error("Error broadcasting player_changed:", err);
-        }
-      }
+      const io = getIO();
+      io.to(auction.roomCode).emit("auction:player_changed", {
+        playerId: playerId,
+        player: { ...nextUnsoldPlayer.toObject(), id: playerId },
+      });
     }
   }
-
   return res.status(StatusCodes.OK).json({ auction });
 }
-
-const bidSchema = Joi.object({
-  teamId: Joi.string().required(),
-  amount: Joi.number().min(0).required(),
-  playerId: Joi.string().optional(),
-});
-
-const pendingBids = new Map<string, Promise<any>>();
 
 export async function placeBid(req: Request, res: Response) {
   try {
@@ -221,10 +272,7 @@ export async function placeBid(req: Request, res: Response) {
       return res.status(StatusCodes.BAD_REQUEST).json({ error: error.message });
 
     const dedupeKey = `bid:${id}:${value.teamId}`;
-    const existing = pendingBids.get(dedupeKey);
-    if (existing) {
-      return existing;
-    }
+    if (pendingBids.has(dedupeKey)) return pendingBids.get(dedupeKey);
 
     const bidPromise = (async () => {
       try {
@@ -238,41 +286,27 @@ export async function placeBid(req: Request, res: Response) {
             : null,
         ]);
 
-        if (!auction)
-          return res
-            .status(StatusCodes.NOT_FOUND)
-            .json({ error: "Auction not found" });
+        if (!auction || !team)
+          return res.status(StatusCodes.NOT_FOUND).json({ error: "Not found" });
         if (auction.state !== "active")
           return res
             .status(StatusCodes.CONFLICT)
-            .json({ error: "Auction is not active" });
-        if (!team)
-          return res
-            .status(StatusCodes.BAD_REQUEST)
-            .json({ error: "Invalid team" });
+            .json({ error: "Auction not active" });
 
-        const currentUser = (req as any).user as
-          | { id: string; role: "admin" | "captain" | "player" }
-          | undefined;
-        if (currentUser?.role === "captain") {
-          const captainTeamId = user?.teamId;
-          if (!captainTeamId || team.id !== captainTeamId) {
-            return res
-              .status(StatusCodes.FORBIDDEN)
-              .json({ error: "Captains can only bid for their team" });
-          }
+        if ((req as any).user?.role === "captain" && user?.teamId !== team.id) {
+          return res
+            .status(StatusCodes.FORBIDDEN)
+            .json({ error: "Captains only bid for their team" });
         }
 
-        const minBid = 1000;
-        if (value.amount < minBid)
+        if (value.amount < 1000)
           return res
             .status(StatusCodes.BAD_REQUEST)
-            .json({ error: `Minimum bid is ${minBid}` });
-
+            .json({ error: "Min bid 1000" });
         if (team.wallet < value.amount)
           return res
             .status(StatusCodes.BAD_REQUEST)
-            .json({ error: "Insufficient team budget" });
+            .json({ error: "Insufficient budget" });
 
         if (
           auction.currentPlayerId &&
@@ -281,7 +315,7 @@ export async function placeBid(req: Request, res: Response) {
         ) {
           return res
             .status(StatusCodes.BAD_REQUEST)
-            .json({ error: "Not the current player being auctioned" });
+            .json({ error: "Wrong player" });
         }
 
         const bid = {
@@ -291,19 +325,14 @@ export async function placeBid(req: Request, res: Response) {
           at: new Date(),
         };
 
-        // FIX: Use Atomic Update with Condition to prevent Race Conditions
-        // We only update if the incoming bid is greater than the current bid stored in DB.
-        // Or if there is no current bid.
-        const query = {
-          _id: id,
-          $or: [
-            { currentBid: { $exists: false } },
-            { "currentBid.amount": { $lt: value.amount } },
-          ],
-        };
-
-        const updatedAuction = await Auction.findOneAndUpdate(
-          query,
+        const updated = await Auction.findOneAndUpdate(
+          {
+            _id: id,
+            $or: [
+              { currentBid: { $exists: false } },
+              { "currentBid.amount": { $lt: value.amount } },
+            ],
+          },
           {
             $set: { currentBid: bid, skippedTeams: [] },
             $push: { bidHistory: bid },
@@ -311,125 +340,78 @@ export async function placeBid(req: Request, res: Response) {
           { new: true }
         );
 
-        if (!updatedAuction) {
-          // If update failed, it means someone else bid higher in the meantime
+        if (!updated)
           return res
-            .status(StatusCodes.CONFLICT) // 409 Conflict
-            .json({ error: "Bid rejected: A higher bid was just placed." });
-        }
+            .status(StatusCodes.CONFLICT)
+            .json({ error: "Higher bid exists" });
 
-        resetAuctionTimer(id, updatedAuction.roomCode).catch(console.error);
+        resetAuctionTimer(id, updated.roomCode).catch(console.error);
+        getIO().to(updated.roomCode).emit("auction:bid_update", {
+          amount: bid.amount,
+          teamId: bid.teamId,
+          playerId: bid.playerId,
+          at: bid.at.getTime(),
+        });
 
-        try {
-          const io = getIO();
-          io.to(updatedAuction.roomCode).emit("auction:bid_update", {
-            amount: bid.amount,
-            teamId: bid.teamId,
-            playerId: bid.playerId,
-            at: bid.at.getTime(),
-          });
-        } catch {}
-
-        return res.status(StatusCodes.OK).json({ auction: updatedAuction });
+        return res.status(StatusCodes.OK).json({ auction: updated });
       } finally {
-        setTimeout(() => {
-          pendingBids.delete(dedupeKey);
-        }, 500);
+        setTimeout(() => pendingBids.delete(dedupeKey), 500);
       }
     })();
 
     pendingBids.set(dedupeKey, bidPromise);
     return bidPromise;
   } catch (err: any) {
-    console.error("Error in placeBid:", err);
     return res
       .status(StatusCodes.INTERNAL_SERVER_ERROR)
-      .json({ error: err.message || "Internal server error" });
+      .json({ error: err.message });
   }
 }
 
 export async function undoBid(req: Request, res: Response) {
   const { id } = req.params;
   const user = (req as any).user as { id: string; role: string } | undefined;
-  if (!user) {
+  if (!user)
     return res.status(StatusCodes.UNAUTHORIZED).json({ error: "Unauthorized" });
-  }
 
-  const auction = await Auction.findById(id).select(
-    "state currentBid bidHistory roomCode"
-  );
-  if (!auction) {
+  const auction = await Auction.findById(id);
+  if (!auction)
     return res
       .status(StatusCodes.NOT_FOUND)
       .json({ error: "Auction not found" });
-  }
-
-  if (auction.state !== "active") {
-    return res
-      .status(StatusCodes.BAD_REQUEST)
-      .json({ error: "Auction is not active" });
-  }
-
-  if (!auction.currentBid) {
+  if (auction.state !== "active")
+    return res.status(StatusCodes.BAD_REQUEST).json({ error: "Not active" });
+  if (!auction.currentBid)
     return res
       .status(StatusCodes.BAD_REQUEST)
       .json({ error: "No bid to undo" });
+
+  const dbUser = await User.findById(user.id).select("teamId");
+  if (!dbUser?.teamId || auction.currentBid.teamId !== dbUser.teamId) {
+    return res.status(StatusCodes.FORBIDDEN).json({ error: "Not your bid" });
   }
 
-  const dbUser = await User.findById(user.id).select("teamId").lean();
-  if (!dbUser || !dbUser.teamId) {
+  const lastBid = auction.bidHistory[auction.bidHistory.length - 1];
+  if (!lastBid || lastBid.teamId !== dbUser.teamId) {
     return res
       .status(StatusCodes.BAD_REQUEST)
-      .json({ error: "You must be assigned to a team" });
-  }
-
-  const teamId = dbUser.teamId;
-
-  if (auction.currentBid.teamId !== teamId) {
-    return res
-      .status(StatusCodes.FORBIDDEN)
-      .json({ error: "You can only undo your own bid" });
-  }
-
-  const lastBidIndex = auction.bidHistory.length - 1;
-  const lastBid = auction.bidHistory[lastBidIndex];
-
-  if (
-    !lastBid ||
-    lastBid.teamId !== teamId ||
-    lastBid.amount !== auction.currentBid.amount
-  ) {
-    return res
-      .status(StatusCodes.BAD_REQUEST)
-      .json({ error: "Cannot undo: another team has bid after you" });
+      .json({ error: "Another bid exists" });
   }
 
   auction.bidHistory.pop();
-
-  if (auction.bidHistory.length > 0) {
-    const previousBid = auction.bidHistory[auction.bidHistory.length - 1];
-    auction.currentBid = previousBid;
-  } else {
-    auction.currentBid = undefined;
-  }
-
+  auction.currentBid =
+    auction.bidHistory.length > 0
+      ? auction.bidHistory[auction.bidHistory.length - 1]
+      : undefined;
   await auction.save();
 
-  const team = await Team.findById(teamId);
-  const teamName = team?.name || `Team ${teamId.substring(0, 6)}`;
-
-  try {
-    const io = getIO();
-    io.to(auction.roomCode).emit("auction:bid_undo", {
-      teamId: teamId,
-      teamName: teamName,
-      currentBid: auction.currentBid,
-    });
-
-    if (auction.currentBid) {
-      await resetAuctionTimer(id, auction.roomCode);
-    }
-  } catch {}
+  const team = await Team.findById(dbUser.teamId);
+  getIO().to(auction.roomCode).emit("auction:bid_undo", {
+    teamId: dbUser.teamId,
+    teamName: team?.name,
+    currentBid: auction.currentBid,
+  });
+  if (auction.currentBid) resetAuctionTimer(id, auction.roomCode);
 
   return res.status(StatusCodes.OK).json({ auction });
 }
@@ -444,25 +426,93 @@ export async function closeAuction(req: Request, res: Response) {
 
   stopAuctionTimer(id);
 
-  auction.state = "completed";
-  await auction.save();
+  let finalData = {};
 
   try {
-    const io = getIO();
-    io.to(auction.roomCode).emit("auction:ended", {
-      message: "Auction has been ended by admin",
+    const teams = await Team.find({ _id: { $in: auction.teams } }).lean();
+    const players = await Player.find({ _id: { $in: auction.players } }).lean();
+
+    const report = teams.map((team) => {
+      const teamPlayers = players.filter(
+        (p) => String(p.teamId) === String(team._id)
+      );
+      const spent = teamPlayers.reduce((sum, p) => {
+        const sale = auction.sales.find(
+          (s) => String(s.playerId) === String(p._id)
+        );
+        return sum + (sale?.price || 0);
+      }, 0);
+
+      return {
+        TeamName: team.name,
+        Captain: team.captain || "None",
+        PlayersCount: teamPlayers.length,
+        TotalSpent: spent,
+        RemainingPurse: team.wallet,
+        Roster: teamPlayers.map((p) => {
+          const sale = auction.sales.find(
+            (s) => String(s.playerId) === String(p._id)
+          );
+          return {
+            Name: p.name,
+            Role: p.role,
+            Mobile: p.mobile,
+            Email: p.email,
+            Price: sale?.price || 0,
+          };
+        }),
+      };
+    });
+
+    const unsoldList = players
+      .filter((p) => !p.teamId || p.teamId === "UNSOLD")
+      .map((p) => ({
+        Name: p.name,
+        Role: p.role,
+        Mobile: p.mobile,
+        Email: p.email,
+        BasePrice: p.basePrice,
+      }));
+
+    finalData = {
+      auctionName: auction.name,
+      date: new Date(),
+      teams: report,
+      unsold: unsoldList,
+    };
+  } catch (err) {
+    console.error("Report generation error:", err);
+  }
+
+  try {
+    await Player.deleteMany({ _id: { $in: auction.players } });
+    await Team.deleteMany({ _id: { $in: auction.teams } });
+
+    auction.state = "completed";
+    auction.players = [];
+    auction.teams = [];
+    await auction.save();
+
+    getIO().to(auction.roomCode).emit("auction:ended", {
+      message: "Auction completed and data cleared.",
       auctionId: auction.id,
     });
-  } catch {}
 
-  return res.status(StatusCodes.OK).json({ auction });
+    return res
+      .status(StatusCodes.OK)
+      .json({ message: "Closed", report: finalData });
+  } catch (err: any) {
+    return res
+      .status(StatusCodes.INTERNAL_SERVER_ERROR)
+      .json({ error: "Failed to wipe data" });
+  }
 }
 
 export async function setCurrentPlayer(req: Request, res: Response) {
-  const schema = Joi.object({ playerId: Joi.string().required() });
-  const { error, value } = schema.validate(req.body);
+  const { error, value } = currentPlayerSchema.validate(req.body);
   if (error)
     return res.status(StatusCodes.BAD_REQUEST).json({ error: error.message });
+
   const { id } = req.params;
   const auction = await Auction.findByIdAndUpdate(
     id,
@@ -470,135 +520,66 @@ export async function setCurrentPlayer(req: Request, res: Response) {
     { new: true }
   );
   if (!auction)
-    return res
-      .status(StatusCodes.NOT_FOUND)
-      .json({ error: "Auction not found" });
+    return res.status(StatusCodes.NOT_FOUND).json({ error: "Not found" });
 
   const player = await Player.findById(value.playerId);
   if (player) {
-    try {
-      const io = getIO();
-      io.to(auction.roomCode).emit("auction:player_changed", {
+    getIO()
+      .to(auction.roomCode)
+      .emit("auction:player_changed", {
         playerId: player.id,
-        player: {
-          id: player.id,
-          name: player.name,
-          photo: player.photo,
-          age: player.age,
-          role: player.role,
-          bowlerType: player.bowlerType,
-          basePrice: player.basePrice,
-        },
+        player: { ...player.toObject(), id: player.id },
       });
-    } catch {}
   }
-
   return res.status(StatusCodes.OK).json({ auction });
 }
 
 export async function sellCurrent(req: Request, res: Response) {
   const { id } = req.params;
   const auction = await Auction.findById(id);
-  if (!auction)
-    return res
-      .status(StatusCodes.NOT_FOUND)
-      .json({ error: "Auction not found" });
-
-  if (auction.state !== "active") {
+  if (!auction || auction.state !== "active")
     return res
       .status(StatusCodes.BAD_REQUEST)
-      .json({ error: "Auction is not active" });
-  }
-
+      .json({ error: "Invalid auction" });
   if (!auction.currentPlayerId)
-    return res
-      .status(StatusCodes.BAD_REQUEST)
-      .json({ error: "No current player set" });
-  if (!auction.currentBid) {
-    const nextUnsoldPlayer = await Player.findOne({
-      $or: [{ teamId: { $exists: false } }, { teamId: null }],
-    })
-      .select("_id name photo age role bowlerType basePrice")
-      .sort({ _id: 1 })
-      .lean();
-    if (nextUnsoldPlayer) {
-      auction.currentPlayerId = (nextUnsoldPlayer as any)._id.toString();
-      auction.currentBid = undefined;
-      await auction.save();
+    return res.status(StatusCodes.BAD_REQUEST).json({ error: "No player" });
 
-      try {
-        const io = getIO();
-        io.to(auction.roomCode).emit("auction:player_changed", {
-          playerId: (nextUnsoldPlayer as any)._id.toString(),
-          player: {
-            id: (nextUnsoldPlayer as any)._id.toString(),
-            name: nextUnsoldPlayer.name,
-            photo: nextUnsoldPlayer.photo,
-            age: nextUnsoldPlayer.age,
-            role: nextUnsoldPlayer.role,
-            bowlerType: nextUnsoldPlayer.bowlerType,
-            basePrice: nextUnsoldPlayer.basePrice,
-          },
+  if (!auction.currentBid) {
+    const nextP = await Player.findOne({
+      $or: [{ teamId: { $exists: false } }, { teamId: null }],
+    }).sort({ _id: 1 });
+    if (nextP) {
+      auction.currentPlayerId = (nextP as any)._id.toString();
+      await auction.save();
+      getIO()
+        .to(auction.roomCode)
+        .emit("auction:player_changed", {
+          playerId: nextP.id,
+          player: { ...nextP.toObject(), id: nextP.id },
         });
-      } catch {}
     } else {
       auction.state = "completed";
       auction.currentPlayerId = undefined;
       await auction.save();
-
-      try {
-        const io = getIO();
-        io.to(auction.roomCode).emit("auction:completed", {
-          message: "All players have been sold!",
-        });
-      } catch {}
+      getIO()
+        .to(auction.roomCode)
+        .emit("auction:completed", { message: "Done" });
     }
     return res.status(StatusCodes.OK).json({ auction });
   }
 
   const team = await Team.findById(auction.currentBid.teamId);
-  if (!team)
-    return res
-      .status(StatusCodes.BAD_REQUEST)
-      .json({ error: "Winning team not found" });
-  if (team.wallet < auction.currentBid.amount)
-    return res
-      .status(StatusCodes.BAD_REQUEST)
-      .json({ error: "Insufficient team budget to settle" });
-
   const player = await Player.findById(auction.currentPlayerId);
-  if (!player)
-    return res
-      .status(StatusCodes.BAD_REQUEST)
-      .json({ error: "Player not found" });
+  if (!team || !player)
+    return res.status(StatusCodes.BAD_REQUEST).json({ error: "Data error" });
 
-  const alreadySold = auction.sales.some(
-    (sale: any) => sale.playerId === auction.currentPlayerId
-  );
-  if (alreadySold) {
-    return res
-      .status(StatusCodes.BAD_REQUEST)
-      .json({ error: "Player already sold" });
-  }
-
-  if (player.teamId && player.teamId !== "UNSOLD") {
-    return res
-      .status(StatusCodes.BAD_REQUEST)
-      .json({ error: "Player already assigned to a team" });
-  }
+  if (team.wallet < auction.currentBid.amount)
+    return res.status(StatusCodes.BAD_REQUEST).json({ error: "No funds" });
 
   const salePrice = auction.currentBid.amount;
 
-  const updatedTeam = await Team.findByIdAndUpdate(
-    team.id,
-    { $inc: { wallet: -salePrice } },
-    { new: true }
-  );
-  if (!updatedTeam || updatedTeam.wallet < 0) {
-    return res
-      .status(StatusCodes.BAD_REQUEST)
-      .json({ error: "Insufficient team budget" });
-  }
+  team.wallet -= salePrice;
+  await team.save();
 
   player.teamId = team.id;
   await player.save();
@@ -612,181 +593,44 @@ export async function sellCurrent(req: Request, res: Response) {
   auction.currentBid = undefined;
   await auction.save();
 
-  const soldPlayerIds = (auction.sales || []).map((s: any) => s.playerId);
-  const nextUnsoldPlayer = await Player.findOne({
-    $or: [
-      { teamId: { $exists: false } },
-      { teamId: null },
-      { teamId: "" },
-      { teamId: "UNSOLD" },
-    ],
-    _id: { $nin: [...soldPlayerIds, ...(auction.unsoldPlayers || [])] },
-  })
-    .select("_id name photo age role bowlerType basePrice teamId")
-    .sort({ _id: 1 });
+  getIO().to(auction.roomCode).emit("auction:sale", {
+    playerId: player.id,
+    playerName: player.name,
+    teamId: team.id,
+    teamName: team.name,
+    price: salePrice,
+  });
 
-  if (nextUnsoldPlayer) {
-    const playerId =
-      nextUnsoldPlayer.id || (nextUnsoldPlayer as any)._id.toString();
-    if (
-      !soldPlayerIds.includes(playerId) &&
-      !auction.unsoldPlayers?.includes(playerId)
-    ) {
-      auction.currentPlayerId = playerId;
-      await auction.save();
-
-      try {
-        const io = getIO();
-        io.to(auction.roomCode).emit("auction:sale", {
-          playerId: player.id || (player as any)._id.toString(),
-          playerName: player.name,
-          teamId: team.id || (team as any)._id.toString(),
-          teamName: team.name,
-          price: salePrice,
-        });
-        io.to(auction.roomCode).emit("auction:player_changed", {
-          playerId: playerId,
-          player: {
-            id: playerId,
-            name: nextUnsoldPlayer.name,
-            photo: nextUnsoldPlayer.photo || "",
-            age: nextUnsoldPlayer.age || 25,
-            role: nextUnsoldPlayer.role || "",
-            bowlerType: nextUnsoldPlayer.bowlerType || "",
-            basePrice: nextUnsoldPlayer.basePrice || 1000,
-          },
-        });
-      } catch (err) {
-        console.error("Error broadcasting sale and player_changed:", err);
-      }
-    }
-  } else {
-    auction.state = "completed";
-    auction.currentPlayerId = undefined;
-    await auction.save();
-
-    try {
-      const io = getIO();
-      io.to(auction.roomCode).emit("auction:sale", {
-        playerId: player.id,
-        playerName: player.name,
-        teamId: team.id,
-        teamName: team.name,
-        price: salePrice,
-      });
-      io.to(auction.roomCode).emit("auction:completed", {
-        message: "All players have been sold!",
-      });
-    } catch {}
-  }
-
-  return res.status(StatusCodes.OK).json({ auction, player, team });
+  return res.status(StatusCodes.OK).json({ auction });
 }
 
 export async function skipPlayer(req: Request, res: Response) {
   const { id } = req.params;
-  const user = (req as any).user as { id: string; role: string } | undefined;
-  if (!user) {
-    return res.status(StatusCodes.UNAUTHORIZED).json({ error: "Unauthorized" });
-  }
-
-  const auction = await Auction.findById(id).select(
-    "state currentPlayerId skippedTeams teams roomCode currentBid"
-  );
-  if (!auction) {
-    return res
-      .status(StatusCodes.NOT_FOUND)
-      .json({ error: "Auction not found" });
-  }
-
-  if (auction.state !== "active") {
+  const user = (req as any).user;
+  const auction = await Auction.findById(id);
+  if (!auction || auction.state !== "active")
     return res
       .status(StatusCodes.BAD_REQUEST)
-      .json({ error: "Auction is not active" });
-  }
+      .json({ error: "Invalid auction" });
 
-  if (!auction.currentPlayerId) {
+  const dbUser = await User.findById(user.id);
+  if (!dbUser?.teamId)
+    return res.status(StatusCodes.BAD_REQUEST).json({ error: "No team" });
+
+  if (!auction.skippedTeams) auction.skippedTeams = [];
+  if (auction.skippedTeams.includes(dbUser.teamId))
     return res
       .status(StatusCodes.BAD_REQUEST)
-      .json({ error: "No current player set" });
-  }
+      .json({ error: "Already skipped" });
 
-  const dbUser = await User.findById(user.id).select("teamId");
-  if (!dbUser || !dbUser.teamId) {
-    return res
-      .status(StatusCodes.BAD_REQUEST)
-      .json({ error: "You must be assigned to a team" });
-  }
-
-  const teamId = dbUser.teamId;
-
-  if (auction.skippedTeams?.includes(teamId)) {
-    return res
-      .status(StatusCodes.BAD_REQUEST)
-      .json({ error: "You have already skipped this player" });
-  }
-
-  if (!auction.skippedTeams) {
-    auction.skippedTeams = [];
-  }
-  auction.skippedTeams.push(teamId);
+  auction.skippedTeams.push(dbUser.teamId);
   await auction.save();
 
-  const team = await Team.findById(teamId);
-  const teamName = team?.name || `Team ${teamId.substring(0, 6)}`;
-
-  try {
-    const io = getIO();
-    io.to(auction.roomCode).emit("auction:skip", {
-      teamId: teamId,
-      teamName: teamName,
-      playerId: auction.currentPlayerId,
-    });
-
-    const teams = await Team.find({ _id: { $in: auction.teams } })
-      .select("captainId _id")
-      .lean();
-    const captainTeams = teams
-      .filter((t: any) => t.captainId)
-      .map((t: any) => (t._id || t.id)?.toString());
-    const allSkipped =
-      captainTeams.length > 0 &&
-      captainTeams.every((tid) => auction.skippedTeams?.includes(tid));
-
-    const currentBidderSkipped =
-      auction.currentBid &&
-      auction.skippedTeams?.includes(auction.currentBid.teamId);
-
-    if (allSkipped || currentBidderSkipped) {
-      const { markPlayerUnsold, stopAuctionTimer } = await import(
-        "../utils/timer.js"
-      );
-      stopAuctionTimer(id);
-      await markPlayerUnsold(id, auction.roomCode);
-      return res
-        .status(StatusCodes.OK)
-        .json({ message: "Player marked as unsold" });
-    }
-
-    const remainingCaptains = captainTeams.filter(
-      (tid) => !auction.skippedTeams?.includes(tid)
-    );
-
-    if (
-      remainingCaptains.length === 1 &&
-      auction.currentBid &&
-      auction.currentBid.teamId === remainingCaptains[0]
-    ) {
-      const { sellCurrentPlayer, stopAuctionTimer } = await import(
-        "../utils/timer.js"
-      );
-      stopAuctionTimer(id);
-      await sellCurrentPlayer(id, auction.roomCode);
-      return res
-        .status(StatusCodes.OK)
-        .json({ message: "Player sold immediately" });
-    }
-  } catch {}
+  getIO().to(auction.roomCode).emit("auction:skip", {
+    teamId: dbUser.teamId,
+    teamName: "Team",
+    playerId: auction.currentPlayerId,
+  });
 
   return res.status(StatusCodes.OK).json({ auction });
 }
