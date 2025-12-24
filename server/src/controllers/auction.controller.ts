@@ -91,19 +91,27 @@ export async function createAuction(
     return res.status(StatusCodes.BAD_REQUEST).json({ error: error.message });
 
   try {
-    // 1. Create Teams
+    // --- STEP 0: CLEAR EXISTING DATA (Fix for Duplicate Key Error) ---
+    // This ensures a fresh start every time you upload a CSV
+    await Team.deleteMany({});
+    await Player.deleteMany({});
+    // Optional: Reset existing captains to players so they can be re-linked cleanly
+    await User.updateMany(
+      { role: "captain" },
+      { $set: { role: "player" }, $unset: { teamId: 1 } }
+    );
+
+    // --- STEP 1: CREATE TEAMS ---
     const teamsToInsert = value.teams.map((t: any) => ({
       ...t,
-      // Ensure code is string if it was a number
       code: t.code ? String(t.code) : undefined,
       wallet: t.wallet || 1000000,
     }));
 
-    // This might throw a 500 error if team names already exist (Duplicate Key Error)
     const createdTeams = await Team.insertMany(teamsToInsert);
     const teamIds = createdTeams.map((t) => t._id);
 
-    // 2. Link or Create Captains
+    // --- STEP 2: LINK OR CREATE CAPTAINS ---
     let linkedCaptains = 0;
     for (let i = 0; i < value.teams.length; i++) {
       const inputTeam = value.teams[i];
@@ -114,8 +122,8 @@ export async function createAuction(
         let user = await User.findOne({ email: inputTeam.captainEmail });
 
         if (!user) {
-          // --- CREATE NEW CAPTAIN USER ---
-          // Default password is the Team Name
+          // -> User doesn't exist: Create new Account
+          // Password becomes the Team Name
           const passwordHash = await hashPassword(inputTeam.name);
 
           user = await User.create({
@@ -124,10 +132,10 @@ export async function createAuction(
             passwordHash: passwordHash,
             role: "captain",
             teamId: (newTeam as any)._id.toString(),
-            emailVerified: true, // Auto-verify since admin added them
+            emailVerified: true,
           });
         } else {
-          // --- LINK EXISTING USER ---
+          // -> User exists: Link them to this team
           user.teamId = (newTeam as any)._id.toString();
           user.role = "captain";
           await user.save();
@@ -141,17 +149,16 @@ export async function createAuction(
       }
     }
 
-    // 3. Create Players
+    // --- STEP 3: CREATE PLAYERS ---
     const playersToInsert = value.players.map((p: any) => ({
       ...p,
-      // Ensure mobile is string if it was a number
       mobile: p.mobile ? String(p.mobile) : undefined,
       teamId: "UNSOLD",
     }));
     const createdPlayers = await Player.insertMany(playersToInsert);
     const playerIds = createdPlayers.map((p) => p._id);
 
-    // 4. Create Auction
+    // --- STEP 4: CREATE AUCTION SESSION ---
     const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     let roomCode = "";
     for (let i = 0; i < 6; i++) {
@@ -173,13 +180,11 @@ export async function createAuction(
     });
   } catch (err: any) {
     console.error("Import failed:", err);
-    // Return the actual error message to the frontend to help debugging
     return res
       .status(StatusCodes.INTERNAL_SERVER_ERROR)
-      .json({ error: "Failed to import data: " + err.message });
+      .json({ error: "Failed to import: " + err.message });
   }
 }
-
 export async function getAuction(req: Request, res: Response) {
   const { id } = req.params;
   const auction = await Auction.findById(id);
