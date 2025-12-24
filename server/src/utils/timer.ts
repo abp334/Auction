@@ -39,6 +39,47 @@ export async function initAuctionQueue(auctionId: string) {
   }
 }
 
+/**
+ * RESTORE TIMERS ON SERVER RESTART
+ * This finds any "active" auctions with a future "timerEndsAt"
+ * and spins up the loop again without resetting the clock.
+ */
+export async function restoreActiveTimers() {
+  try {
+    const activeAuctions = await Auction.find({
+      state: "active",
+      timerEndsAt: { $exists: true, $ne: null },
+      currentPlayerId: { $exists: true, $ne: null },
+    });
+
+    console.log(
+      `Checking ${activeAuctions.length} active auctions for timer restoration...`
+    );
+
+    for (const auction of activeAuctions) {
+      // TS FIX: Ensure timerEndsAt exists before using it
+      if (!auction.currentPlayerId || !auction.timerEndsAt) continue;
+
+      const endTime = new Date(auction.timerEndsAt).getTime();
+      const duration = auction.timerDuration || 30;
+
+      // If timer has valid data, restart the internal loop
+      if (endTime > 0) {
+        console.log(`Restoring timer for auction: ${auction.name}`);
+        // We pass the EXISTING endTime so we don't reset the clock
+        runTimerLoop(
+          (auction._id as any).toString(),
+          auction.roomCode,
+          endTime,
+          duration
+        );
+      }
+    }
+  } catch (err) {
+    console.error("Failed to restore timers:", err);
+  }
+}
+
 export async function startAuctionTimer(auctionId: string, roomCode: string) {
   // Clear existing timer if any
   stopAuctionTimer(auctionId);
@@ -53,11 +94,11 @@ export async function startAuctionTimer(auctionId: string, roomCode: string) {
   // Use configured duration or default to 30s
   const duration = auction.timerDuration || 30;
 
-  // FIXED: Calculate Absolute End Time
+  // Calculate Absolute End Time
   const startTime = new Date();
   const endTimeMilliseconds = Date.now() + duration * 1000;
 
-  // Update auction
+  // Update auction in DB
   await Auction.findByIdAndUpdate(auctionId, {
     timerStart: startTime,
     timerEndsAt: new Date(endTimeMilliseconds),
@@ -65,15 +106,33 @@ export async function startAuctionTimer(auctionId: string, roomCode: string) {
   });
 
   const io = getIO();
-
-  // Broadcast the TARGET timestamp (endTime)
   io.to(roomCode).emit("auction:timer", {
     timeLeft: duration,
     totalTime: duration,
-    endTime: endTimeMilliseconds, // Used by frontend for sync
+    endTime: endTimeMilliseconds,
   });
 
-  // Server-side check loop (Runs every 1s)
+  // Start the actual interval loop
+  runTimerLoop(auctionId, roomCode, endTimeMilliseconds, duration);
+}
+
+/**
+ * Shared Internal Loop Logic
+ * Used by both startAuctionTimer (new timer) and restoreActiveTimers (server restart)
+ */
+function runTimerLoop(
+  auctionId: string,
+  roomCode: string,
+  endTimeMilliseconds: number,
+  totalDuration: number
+) {
+  // Clear just in case
+  if (activeTimers.has(auctionId)) {
+    clearInterval(activeTimers.get(auctionId));
+  }
+
+  const io = getIO();
+
   const timer = setInterval(async () => {
     const now = Date.now();
 
@@ -118,7 +177,7 @@ export async function startAuctionTimer(auctionId: string, roomCode: string) {
       if (Math.floor((endTimeMilliseconds - now) / 1000) % 5 === 0) {
         io.to(roomCode).emit("auction:timer", {
           timeLeft: Math.floor((endTimeMilliseconds - now) / 1000),
-          totalTime: duration,
+          totalTime: totalDuration,
           endTime: endTimeMilliseconds,
         });
       }
@@ -212,6 +271,7 @@ export async function sellCurrentPlayer(auctionId: string, roomCode: string) {
     teamId: (updatedTeam as any)._id.toString(),
     teamName: updatedTeam.name,
     price: salePrice,
+    saleType: "sold",
   });
 
   await moveToNextPlayer(auctionId, roomCode);

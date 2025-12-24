@@ -312,6 +312,7 @@ export async function placeBid(req: Request, res: Response) {
             : null,
         ]);
 
+        // --- VALIDATION CHECKS ---
         if (!auction || !team)
           return res.status(StatusCodes.NOT_FOUND).json({ error: "Not found" });
         if (auction.state !== "active")
@@ -319,16 +320,61 @@ export async function placeBid(req: Request, res: Response) {
             .status(StatusCodes.CONFLICT)
             .json({ error: "Auction not active" });
 
+        // Captain Check
         if ((req as any).user?.role === "captain" && user?.teamId !== team.id) {
           return res
             .status(StatusCodes.FORBIDDEN)
             .json({ error: "Captains only bid for their team" });
         }
 
-        if (value.amount < 1000)
+        // --- NEW: SQUAD SIZE CHECK ---
+        const currentSquadSize = await Player.countDocuments({
+          teamId: team.id,
+        });
+        if (currentSquadSize >= 25) {
           return res
             .status(StatusCodes.BAD_REQUEST)
-            .json({ error: "Min bid 1000" });
+            .json({ error: "Squad full (Max 25 players)" });
+        }
+
+        // --- NEW: DYNAMIC INCREMENT CHECK ---
+        // 1. Get the current "Target Price" (Last Bid OR Base Price)
+        let currentPrice = 0;
+        if (auction.currentBid?.amount) {
+          currentPrice = auction.currentBid.amount;
+        } else {
+          const player = await Player.findById(auction.currentPlayerId).select(
+            "basePrice"
+          );
+          if (!player)
+            return res.status(400).json({ error: "No active player" });
+          currentPrice = player.basePrice;
+        }
+
+        // 2. Calculate Required Increment based on price bracket
+        let minIncrement = 0;
+        if (currentPrice < 1000000) minIncrement = 50000; // Under 10L: +50k
+        else if (currentPrice < 5000000)
+          minIncrement = 200000; // Under 50L: +2L
+        else minIncrement = 500000; // Above 50L: +5L
+
+        // 3. Determine Minimum Valid Bid
+        // If it's the first bid, it just needs to match Base Price.
+        // If it's a counter-bid, it must be Current + Increment.
+        let minValidBid = 0;
+        if (!auction.currentBid) {
+          minValidBid = currentPrice; // First bid can match base price
+        } else {
+          minValidBid = currentPrice + minIncrement;
+        }
+
+        if (value.amount < minValidBid) {
+          return res.status(StatusCodes.BAD_REQUEST).json({
+            error: `Bid too low. Minimum required: ₹${minValidBid.toLocaleString()}`,
+          });
+        }
+
+        // --- WALLET CHECK ---
         if (team.wallet < value.amount)
           return res
             .status(StatusCodes.BAD_REQUEST)
@@ -344,6 +390,7 @@ export async function placeBid(req: Request, res: Response) {
             .json({ error: "Wrong player" });
         }
 
+        // --- EXECUTE BID ---
         const bid = {
           teamId: value.teamId,
           amount: value.amount,
@@ -393,7 +440,6 @@ export async function placeBid(req: Request, res: Response) {
       .json({ error: err.message });
   }
 }
-
 export async function undoBid(req: Request, res: Response) {
   const { id } = req.params;
   const user = (req as any).user as { id: string; role: string } | undefined;
