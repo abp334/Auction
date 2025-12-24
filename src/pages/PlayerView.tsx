@@ -9,7 +9,7 @@ import { Gavel, LogOut } from "lucide-react";
 import AuctionRoom from "@/components/auction/AuctionRoom";
 import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/hooks/use-auth";
-
+import logo from "@/assets/logo.png";
 const PlayerView = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
@@ -87,7 +87,14 @@ const PlayerView = () => {
         <div className="container mx-auto px-4 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="bg-amber-500/10 p-2 rounded-lg border border-amber-500">
-              <Gavel className="w-8 h-8 text-amber-500" />
+              <img
+                src={logo}
+                alt="ClashBid Logo"
+                className="w-6 h-6 object-contain"
+                onError={(e) => {
+                  e.currentTarget.style.display = "none";
+                }}
+              />
             </div>
             <div className="text-white">
               <h1 className="text-2xl font-bold">Spectator View</h1>
@@ -110,7 +117,14 @@ const PlayerView = () => {
           <Card className="shadow-2xl border-amber-500/30 bg-[#1a2332]">
             <CardHeader className="text-center space-y-4">
               <div className="bg-amber-500/10 w-20 h-20 rounded-full flex items-center justify-center mx-auto border-2 border-amber-500">
-                <Gavel className="w-10 h-10 text-amber-500" />
+                <img
+                  src={logo}
+                  alt="ClashBid Logo"
+                  className="w-6 h-6 object-contain"
+                  onError={(e) => {
+                    e.currentTarget.style.display = "none";
+                  }}
+                />
               </div>
               <CardTitle className="text-3xl text-white">
                 Watch Auction

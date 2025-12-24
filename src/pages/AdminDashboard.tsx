@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Gavel, LogOut } from "lucide-react";
 import AuctionTab from "@/components/admin/AuctionTab";
 import { useAuth } from "@/hooks/use-auth";
-
+import logo from "@/assets/logo.png";
 const AdminDashboard = () => {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
@@ -19,7 +19,14 @@ const AdminDashboard = () => {
       <header className="border-b border-white/10 bg-white/5 backdrop-blur-sm">
         <div className="container mx-auto px-4 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <Gavel className="w-8 h-8 text-amber-500" />
+            <img
+              src={logo}
+              alt="ClashBid Logo"
+              className="w-6 h-6 object-contain"
+              onError={(e) => {
+                e.currentTarget.style.display = "none";
+              }}
+            />
             <div className="text-white">
               <h1 className="text-2xl font-bold">Auction Control Center</h1>
               <p className="text-sm opacity-90">
