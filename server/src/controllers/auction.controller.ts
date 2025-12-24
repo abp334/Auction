@@ -6,6 +6,7 @@ import { Player } from "../models/Player.js";
 import { Team } from "../models/Team.js";
 import { getIO } from "../sockets/io.js";
 import { User } from "../models/User.js";
+import { hashPassword } from "../utils/auth.js";
 import {
   startAuctionTimer,
   stopAuctionTimer,
@@ -97,27 +98,46 @@ export async function createAuction(
       code: t.code ? String(t.code) : undefined,
       wallet: t.wallet || 1000000,
     }));
+
+    // This might throw a 500 error if team names already exist (Duplicate Key Error)
     const createdTeams = await Team.insertMany(teamsToInsert);
     const teamIds = createdTeams.map((t) => t._id);
 
-    // 2. Link Captains
+    // 2. Link or Create Captains
     let linkedCaptains = 0;
     for (let i = 0; i < value.teams.length; i++) {
       const inputTeam = value.teams[i];
       const newTeam = createdTeams[i];
 
       if (inputTeam.captainEmail) {
-        const user = await User.findOne({ email: inputTeam.captainEmail });
-        if (user) {
+        // Check if user exists
+        let user = await User.findOne({ email: inputTeam.captainEmail });
+
+        if (!user) {
+          // --- CREATE NEW CAPTAIN USER ---
+          // Default password is the Team Name
+          const passwordHash = await hashPassword(inputTeam.name);
+
+          user = await User.create({
+            name: inputTeam.captain || "Captain",
+            email: inputTeam.captainEmail,
+            passwordHash: passwordHash,
+            role: "captain",
+            teamId: (newTeam as any)._id.toString(),
+            emailVerified: true, // Auto-verify since admin added them
+          });
+        } else {
+          // --- LINK EXISTING USER ---
           user.teamId = (newTeam as any)._id.toString();
           user.role = "captain";
           await user.save();
-
-          newTeam.captainId = (user as any)._id.toString();
-          newTeam.captain = user.name;
-          await newTeam.save();
-          linkedCaptains++;
         }
+
+        // Link User to Team
+        newTeam.captainId = (user as any)._id.toString();
+        newTeam.captain = user.name;
+        await newTeam.save();
+        linkedCaptains++;
       }
     }
 
@@ -153,22 +173,12 @@ export async function createAuction(
     });
   } catch (err: any) {
     console.error("Import failed:", err);
+    // Return the actual error message to the frontend to help debugging
     return res
       .status(StatusCodes.INTERNAL_SERVER_ERROR)
-      .json({ error: "Failed to import data" });
+      .json({ error: "Failed to import data: " + err.message });
   }
 }
-
-export async function getAuction(req: Request, res: Response) {
-  const { id } = req.params;
-  const auction = await Auction.findById(id);
-  if (!auction)
-    return res
-      .status(StatusCodes.NOT_FOUND)
-      .json({ error: "Auction not found" });
-  return res.status(StatusCodes.OK).json({ auction });
-}
-
 export async function startAuction(req: Request, res: Response) {
   const { id } = req.params;
   const auction = await Auction.findByIdAndUpdate(
