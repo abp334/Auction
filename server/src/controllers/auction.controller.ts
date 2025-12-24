@@ -179,6 +179,17 @@ export async function createAuction(
       .json({ error: "Failed to import data: " + err.message });
   }
 }
+
+export async function getAuction(req: Request, res: Response) {
+  const { id } = req.params;
+  const auction = await Auction.findById(id);
+  if (!auction)
+    return res
+      .status(StatusCodes.NOT_FOUND)
+      .json({ error: "Auction not found" });
+  return res.status(StatusCodes.OK).json({ auction });
+}
+
 export async function startAuction(req: Request, res: Response) {
   const { id } = req.params;
   const auction = await Auction.findByIdAndUpdate(
