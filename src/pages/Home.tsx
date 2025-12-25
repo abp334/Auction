@@ -62,7 +62,7 @@ const Home = () => {
               </span>
             </div>
 
-            {/* Desktop Menu */}
+            {/* Desktop Menu  (desktop view)*/}
             <div className="hidden md:flex items-center gap-8 text-sm font-medium">
               <a
                 href="#features"
