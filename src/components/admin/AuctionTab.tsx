@@ -359,6 +359,7 @@ const AuctionTab = () => {
                         <div className="space-y-2">
                           <Label>Team Name</Label>
                           <Input
+                            placeholder="e.g. Mumbai Indians"
                             value={teamForm.name}
                             onChange={(e) =>
                               setTeamForm({ ...teamForm, name: e.target.value })
@@ -367,7 +368,7 @@ const AuctionTab = () => {
                           />
                         </div>
                         <div className="space-y-2">
-                          <Label>Budget</Label>
+                          <Label>Budget ($)</Label>
                           <Input
                             type="number"
                             value={teamForm.wallet}
@@ -380,10 +381,27 @@ const AuctionTab = () => {
                             className="bg-[#0f1419] border-white/20"
                           />
                         </div>
+                        {/* NEW FIELD: Captain Name */}
                         <div className="space-y-2">
-                          <Label>Captain Email</Label>
+                          <Label>Captain Name</Label>
+                          <Input
+                            placeholder="e.g. Rohit Sharma"
+                            value={teamForm.captain}
+                            onChange={(e) =>
+                              setTeamForm({
+                                ...teamForm,
+                                captain: e.target.value,
+                              })
+                            }
+                            className="bg-[#0f1419] border-white/20"
+                          />
+                        </div>
+                        {/* CRITICAL: Captain Email for Auth */}
+                        <div className="space-y-2">
+                          <Label>Captain Email (For Login)</Label>
                           <Input
                             type="email"
+                            placeholder="captain@example.com"
                             value={teamForm.captainEmail}
                             onChange={(e) =>
                               setTeamForm({
@@ -394,9 +412,10 @@ const AuctionTab = () => {
                             className="bg-[#0f1419] border-white/20"
                           />
                         </div>
-                        <div className="space-y-2">
-                          <Label>Owner</Label>
+                        <div className="space-y-2 col-span-2">
+                          <Label>Owner Name</Label>
                           <Input
+                            placeholder="Owner Name"
                             value={teamForm.owner}
                             onChange={(e) =>
                               setTeamForm({
@@ -410,8 +429,10 @@ const AuctionTab = () => {
                       </div>
                       <Button
                         className="w-full bg-amber-500 text-black font-bold"
+                        disabled={!teamForm.name || !teamForm.captainEmail}
                         onClick={() => {
                           setTeamsData([...teamsData, teamForm]);
+                          // Reset form
                           setTeamForm({
                             name: "",
                             wallet: 10000000,
@@ -422,9 +443,14 @@ const AuctionTab = () => {
                             captainEmail: "",
                           });
                           setIsTeamDialogOpen(false);
+                          toast({
+                            title: "Team Added",
+                            description:
+                              "Team and Captain staged for creation.",
+                          });
                         }}
                       >
-                        Add to List
+                        Add to Staging List
                       </Button>
                     </DialogContent>
                   </Dialog>
@@ -456,7 +482,13 @@ const AuctionTab = () => {
                         key={i}
                         className="flex items-center justify-between bg-white/5 p-2 rounded text-[10px] text-gray-300"
                       >
-                        <span>{t.name}</span>
+                        <div className="flex flex-col">
+                          <span className="font-bold text-white">{t.name}</span>
+                          <span className="opacity-60">
+                            {t.captainEmail ||
+                              "No Email (No User will be created)"}
+                          </span>
+                        </div>
                         <Trash2
                           className="w-3 h-3 text-red-500 cursor-pointer"
                           onClick={() =>
