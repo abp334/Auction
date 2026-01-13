@@ -553,7 +553,7 @@ const Home = () => {
               Privacy
             </a>
           </div>
-          <div className="text-sm">&copy; 2025 AceBid.</div>
+          <div className="text-sm">&copy; 2025 ClashBid.</div>
         </div>
       </footer>
     </div>
