@@ -48,6 +48,39 @@ import {
 } from "@/components/ui/select";
 import { apiFetch } from "@/lib/api";
 import { parseCSV, jsonToCSV } from "@/lib/utils";
+import AuctionRoom from "@/components/auction/AuctionRoom";
+
+const PLAYER_ROLES = [
+  "Batsman",
+  "Bowler",
+  "All-Rounder",
+  "Wicketkeeper-Batsman",
+];
+
+const BATTING_TYPES = ["Right-Hand Batsman", "Left-Hand Batsman"];
+
+const BOWLING_TYPES = [
+  "None",
+  "Right Arm Fast",
+  "Right Arm Medium Fast",
+  "Right Arm Medium",
+  "Left Arm Fast",
+  "Left Arm Medium Fast",
+  "Left Arm Medium",
+  "Right Arm Off Spin",
+  "Right Arm Leg Spin",
+  "Left Arm Orthodox",
+  "Left Arm Chinaman",
+  "Left Arm Wrist Spin",
+];
+
+const needsBattingType = (role: string) =>
+  ["Batsman", "All-Rounder", "Wicketkeeper-Batsman"].includes(role);
+
+const needsBowlingType = (role: string) =>
+  ["Bowler", "All-Rounder"].includes(role);
+
+const noop = () => undefined;
 
 const AuctionTab = () => {
   const { toast } = useToast();
@@ -77,10 +110,10 @@ const AuctionTab = () => {
   });
   const [playerForm, setPlayerForm] = useState({
     name: "",
-    role: "All-Rounder",
+    role: "",
     basePrice: 1000,
     age: 25,
-    batsmanType: "Right-handed",
+    batsmanType: "Right-Hand Batsman",
     bowlerType: "None",
     mobile: "",
     email: "",
@@ -156,12 +189,25 @@ const AuctionTab = () => {
           }));
           setTeamsData((prev) => [...prev, ...mappedTeams]);
         } else {
+          const rowsMissingRole = parsed.filter((p) => !String(p.role || "").trim());
+          if (rowsMissingRole.length > 0) {
+            toast({
+              title: "Missing Player Roles",
+              description: "Every player row must include a role.",
+              variant: "destructive",
+            });
+            return;
+          }
           const mappedPlayers = parsed.map((p) => ({
             name: p.name || "Unknown Player",
-            role: p.role || "All-Rounder",
+            role: String(p.role).trim(),
             basePrice: Number(p.baseprice || p.price || 1000),
             age: Number(p.age || 25),
             photo: p.photo || "",
+            batsmanType: p.batsmanType || p.battingType || p.batting || "",
+            bowlerType: p.bowlerType || p.bowlingType || p.bowling || "None",
+            mobile: p.mobile || "",
+            email: p.email || "",
           }));
           setPlayersData((prev) => [...prev, ...mappedPlayers]);
         }
@@ -186,6 +232,14 @@ const AuctionTab = () => {
         title: "Validation Error",
         description:
           "Ensure you have a tournament name, 2+ teams, and players.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (playersData.some((player) => !String(player.role || "").trim())) {
+      toast({
+        title: "Validation Error",
+        description: "Every player must have a role before creating an auction.",
         variant: "destructive",
       });
       return;
@@ -569,33 +623,129 @@ const AuctionTab = () => {
                           }
                           className="bg-[#0f1419]"
                         />
+                        <Input
+                          placeholder="Age"
+                          type="number"
+                          value={playerForm.age}
+                          onChange={(e) =>
+                            setPlayerForm({
+                              ...playerForm,
+                              age: Number(e.target.value),
+                            })
+                          }
+                          className="bg-[#0f1419]"
+                        />
+                        <Input
+                          placeholder="Mobile"
+                          value={playerForm.mobile}
+                          onChange={(e) =>
+                            setPlayerForm({
+                              ...playerForm,
+                              mobile: e.target.value,
+                            })
+                          }
+                          className="bg-[#0f1419]"
+                        />
+                        <Input
+                          placeholder="Email"
+                          type="email"
+                          value={playerForm.email}
+                          onChange={(e) =>
+                            setPlayerForm({
+                              ...playerForm,
+                              email: e.target.value,
+                            })
+                          }
+                          className="bg-[#0f1419]"
+                        />
                         <Select
+                          value={playerForm.role}
                           onValueChange={(v) =>
-                            setPlayerForm({ ...playerForm, role: v })
+                            setPlayerForm({
+                              ...playerForm,
+                              role: v,
+                              batsmanType: needsBattingType(v)
+                                ? playerForm.batsmanType || "Right-Hand Batsman"
+                                : "",
+                              bowlerType: needsBowlingType(v)
+                                ? playerForm.bowlerType === "None"
+                                  ? "Right Arm Medium Fast"
+                                  : playerForm.bowlerType
+                                : "None",
+                            })
                           }
                         >
                           <SelectTrigger className="bg-[#0f1419]">
                             <SelectValue placeholder="Role" />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="Batsman">Batsman</SelectItem>
-                            <SelectItem value="Bowler">Bowler</SelectItem>
-                            <SelectItem value="All-Rounder">
-                              All-Rounder
-                            </SelectItem>
+                            {PLAYER_ROLES.map((role) => (
+                              <SelectItem key={role} value={role}>
+                                {role}
+                              </SelectItem>
+                            ))}
                           </SelectContent>
                         </Select>
+                        {needsBattingType(playerForm.role) && (
+                          <Select
+                            value={playerForm.batsmanType}
+                            onValueChange={(v) =>
+                              setPlayerForm({ ...playerForm, batsmanType: v })
+                            }
+                          >
+                            <SelectTrigger className="bg-[#0f1419]">
+                              <SelectValue placeholder="Batting type" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {BATTING_TYPES.map((type) => (
+                                <SelectItem key={type} value={type}>
+                                  {type}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        )}
+                        {needsBowlingType(playerForm.role) && (
+                          <Select
+                            value={playerForm.bowlerType}
+                            onValueChange={(v) =>
+                              setPlayerForm({ ...playerForm, bowlerType: v })
+                            }
+                          >
+                            <SelectTrigger className="bg-[#0f1419]">
+                              <SelectValue placeholder="Bowling type" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {BOWLING_TYPES.filter((type) => type !== "None").map(
+                                (type) => (
+                                  <SelectItem key={type} value={type}>
+                                    {type}
+                                  </SelectItem>
+                                )
+                              )}
+                            </SelectContent>
+                          </Select>
+                        )}
                       </div>
                       <Button
                         className="w-full bg-amber-500 text-black font-bold"
+                        disabled={
+                          !playerForm.name.trim() ||
+                          !playerForm.role ||
+                          (needsBattingType(playerForm.role) &&
+                            !playerForm.batsmanType) ||
+                          (needsBowlingType(playerForm.role) &&
+                            (!playerForm.bowlerType ||
+                              playerForm.bowlerType === "None"))
+                        }
                         onClick={() => {
                           setPlayersData([...playersData, playerForm]);
                           setPlayerForm({
                             name: "",
-                            role: "All-Rounder",
+                            role: "",
                             basePrice: 1000,
                             age: 25,
-                            batsmanType: "Right-handed",
+                            batsmanType: "Right-Hand Batsman",
                             bowlerType: "None",
                             mobile: "",
                             email: "",
@@ -636,7 +786,9 @@ const AuctionTab = () => {
                         key={i}
                         className="flex items-center justify-between bg-white/5 p-2 rounded text-[10px] text-gray-300"
                       >
-                        <span>{p.name}</span>
+                        <span>
+                          {p.name} <span className="text-amber-400">({p.role})</span>
+                        </span>
                         <Trash2
                           className="w-3 h-3 text-red-500 cursor-pointer"
                           onClick={() =>
@@ -668,6 +820,7 @@ const AuctionTab = () => {
         </Card>
       ) : (
         // ACTIVE AUCTION CONTROL UI (THIS WAS MISSING BEFORE)
+        <>
         <Card className="border-green-500/30 bg-[#1a2332]">
           <CardHeader className="flex flex-row items-center justify-between border-b border-white/10 pb-6">
             <div>
@@ -756,16 +909,24 @@ const AuctionTab = () => {
               </div>
               <div className="bg-[#0f1419] p-4 rounded-lg border border-white/10 text-center">
                 <div className="text-xl font-bold text-blue-500 mt-2">
-                  $
+                  ₹
                   {(currentAuction.sales || [])
                     .reduce((acc: any, s: any) => acc + s.price, 0)
-                    .toLocaleString()}
+                    .toLocaleString("en-IN")}
                 </div>
                 <div className="text-[10px] text-gray-400 uppercase">Spent</div>
               </div>
             </div>
           </CardContent>
         </Card>
+        <div className="overflow-hidden rounded-lg border border-amber-500/30">
+          <AuctionRoom
+            role="admin"
+            roomCode={currentAuction.roomCode}
+            onExit={noop}
+          />
+        </div>
+        </>
       )}
 
       {/* END AUCTION CONFIRMATION */}

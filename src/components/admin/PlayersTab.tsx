@@ -27,11 +27,42 @@ interface Player {
   mobile: string;
   email: string;
   photo: string;
+  role: string;
   bidAmount: number;
   batsmanType: string;
   bowlerType: string;
   age: number;
 }
+
+const PLAYER_ROLES = [
+  "Batsman",
+  "Bowler",
+  "All-Rounder",
+  "Wicketkeeper-Batsman",
+];
+
+const BATTING_TYPES = ["Right-Hand Batsman", "Left-Hand Batsman"];
+
+const BOWLING_TYPES = [
+  "None",
+  "Right Arm Fast",
+  "Right Arm Medium Fast",
+  "Right Arm Medium",
+  "Left Arm Fast",
+  "Left Arm Medium Fast",
+  "Left Arm Medium",
+  "Right Arm Off Spin",
+  "Right Arm Leg Spin",
+  "Left Arm Orthodox",
+  "Left Arm Chinaman",
+  "Left Arm Wrist Spin",
+];
+
+const needsBattingType = (role: string) =>
+  ["Batsman", "All-Rounder", "Wicketkeeper-Batsman"].includes(role);
+
+const needsBowlingType = (role: string) =>
+  ["Bowler", "All-Rounder"].includes(role);
 
 const PlayersTab = () => {
   const { toast } = useToast();
@@ -45,8 +76,9 @@ const PlayersTab = () => {
     mobile: "",
     email: "",
     photo: "",
+    role: "",
     bidAmount: 5000,
-    batsmanType: "Right-handed",
+    batsmanType: "Right-Hand Batsman",
     bowlerType: "Not a Bowler",
     age: 20,
   });
@@ -65,8 +97,9 @@ const PlayersTab = () => {
             mobile: p.mobile || "",
             email: p.email || "",
             photo: p.photo || "",
+            role: p.role || "",
             bidAmount: p.basePrice || 0,
-            batsmanType: p.role || "",
+            batsmanType: p.batsmanType || "",
             bowlerType: p.bowlerType || "Not a Bowler",
             age: p.age || 20,
           }))
@@ -89,7 +122,8 @@ const PlayersTab = () => {
           body: JSON.stringify({
             name: formData.name,
             basePrice: formData.bidAmount,
-            role: formData.batsmanType,
+            role: formData.role,
+            batsmanType: formData.batsmanType,
             bowlerType: formData.bowlerType,
             age: formData.age,
             photo: formData.photo,
@@ -118,7 +152,8 @@ const PlayersTab = () => {
           body: JSON.stringify({
             name: formData.name,
             basePrice: formData.bidAmount,
-            role: formData.batsmanType,
+            role: formData.role,
+            batsmanType: formData.batsmanType,
             bowlerType: formData.bowlerType,
             age: formData.age,
             photo: formData.photo,
@@ -173,8 +208,9 @@ const PlayersTab = () => {
       mobile: "",
       email: "",
       photo: "",
+      role: "",
       bidAmount: 5000,
-      batsmanType: "Right-handed",
+      batsmanType: "Right-Hand Batsman",
       bowlerType: "Not a Bowler",
       age: 20,
     });
@@ -258,6 +294,38 @@ const PlayersTab = () => {
                   />
                 </div>
                 <div className="space-y-2">
+                  <Label htmlFor="role">Role</Label>
+                  <Select
+                    value={formData.role}
+                    onValueChange={(value) =>
+                      setFormData({
+                        ...formData,
+                        role: value,
+                        batsmanType: needsBattingType(value)
+                          ? formData.batsmanType || "Right-Hand Batsman"
+                          : "",
+                        bowlerType: needsBowlingType(value)
+                          ? formData.bowlerType === "Not a Bowler"
+                            ? "Right Arm Medium Fast"
+                            : formData.bowlerType
+                          : "Not a Bowler",
+                      })
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select role" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {PLAYER_ROLES.map((role) => (
+                        <SelectItem key={role} value={role}>
+                          {role}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                {needsBattingType(formData.role) && (
+                <div className="space-y-2">
                   <Label htmlFor="batsmanType">Batting Hand</Label>
                   <Select
                     value={formData.batsmanType}
@@ -266,14 +334,19 @@ const PlayersTab = () => {
                     }
                   >
                     <SelectTrigger>
-                      <SelectValue />
+                      <SelectValue placeholder="Select batting type" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="Right-handed">Right-handed</SelectItem>
-                      <SelectItem value="Left-handed">Left-handed</SelectItem>
+                      {BATTING_TYPES.map((type) => (
+                        <SelectItem key={type} value={type}>
+                          {type}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 </div>
+                )}
+                {needsBowlingType(formData.role) && (
                 <div className="space-y-2">
                   <Label htmlFor="bowlerType">Bowler Type</Label>
                   <Select
@@ -283,22 +356,20 @@ const PlayersTab = () => {
                     }
                   >
                     <SelectTrigger>
-                      <SelectValue />
+                      <SelectValue placeholder="Select bowling type" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="Fast Bowler">Fast Bowler</SelectItem>
-                      <SelectItem value="Medium Pacer">Medium Pacer</SelectItem>
-                      <SelectItem value="Off-Spin Bowler">
-                        Off-Spin Bowler
-                      </SelectItem>
-                      <SelectItem value="Leg-Spin Bowler">
-                        Leg-Spin Bowler
-                      </SelectItem>
-                      <SelectItem value="All-rounder">All-rounder</SelectItem>
-                      <SelectItem value="Not a Bowler">Not a Bowler</SelectItem>
+                      {BOWLING_TYPES.filter((type) => type !== "None").map(
+                        (type) => (
+                          <SelectItem key={type} value={type}>
+                            {type}
+                          </SelectItem>
+                        )
+                      )}
                     </SelectContent>
                   </Select>
                 </div>
+                )}
                 <div className="space-y-2 col-span-2">
                   <Label htmlFor="bidAmount">Starting Bid Amount ($)</Label>
                   <Input
@@ -323,7 +394,17 @@ const PlayersTab = () => {
                 >
                   Cancel
                 </Button>
-                <Button type="submit">
+                <Button
+                  type="submit"
+                  disabled={
+                    !formData.role ||
+                    (needsBattingType(formData.role) &&
+                      !formData.batsmanType) ||
+                    (needsBowlingType(formData.role) &&
+                      (!formData.bowlerType ||
+                        formData.bowlerType === "Not a Bowler"))
+                  }
+                >
                   {editingPlayer ? "Update" : "Add"} Player
                 </Button>
               </div>
@@ -388,15 +469,18 @@ const PlayersTab = () => {
                   <span className="font-semibold">Mobile:</span> {player.mobile}
                 </p>
                 <p>
+                  <span className="font-semibold">Role:</span> {player.role}
+                </p>
+                <p>
                   <span className="font-semibold">Batting Hand:</span>{" "}
-                  {player.batsmanType}
+                  {player.batsmanType || "-"}
                 </p>
                 <p>
                   <span className="font-semibold">Bowler:</span>{" "}
                   {player.bowlerType}
                 </p>
                 <p className="text-accent font-semibold">
-                  Base Price: ${player.bidAmount.toLocaleString()}
+                  Base Price: ₹{player.bidAmount.toLocaleString("en-IN")}
                 </p>
               </CardContent>
             </Card>

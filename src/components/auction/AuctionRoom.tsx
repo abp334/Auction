@@ -19,7 +19,7 @@ import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/hooks/use-auth";
 
 interface AuctionRoomProps {
-  role: "captain" | "player";
+  role: "admin" | "captain" | "player";
   roomCode: string;
   onExit: () => void;
 }
@@ -91,6 +91,32 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
   const loadMyPlayers = useCallback(async () => {
     if (role === "captain" && user?.teamId) {
       try {
+        let salePrices = new Map<string, number>();
+        let activeAuctionId = auctionId;
+
+        if (!activeAuctionId) {
+          const auctionRes = await apiFetch(
+            `/auctions?roomCode=${encodeURIComponent(roomCode)}`
+          );
+          if (auctionRes.ok) {
+            const { auctions } = await auctionRes.json();
+            activeAuctionId = auctions[0]?._id || null;
+          }
+        }
+
+        if (activeAuctionId) {
+          const auctionRes = await apiFetch(`/auctions/${activeAuctionId}`);
+          if (auctionRes.ok) {
+            const { auction } = await auctionRes.json();
+            salePrices = new Map(
+              (auction.sales || []).map((sale: any) => [
+                String(sale.playerId),
+                sale.price || 0,
+              ])
+            );
+          }
+        }
+
         const pRes = await apiFetch(`/players?teamId=${user.teamId}`);
         if (pRes.ok) {
           const { players } = await pRes.json();
@@ -100,7 +126,7 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
               name: p.name,
               photo: p.photo || "",
               basePrice: p.basePrice || 0,
-              currentBid: p.basePrice || 0,
+              currentBid: salePrices.get(String(p._id)) || p.basePrice || 0,
               age: p.age || 25,
               batsmanType: p.role || "",
               bowlerType: p.bowlerType || "Not a Bowler",
@@ -111,7 +137,7 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
         console.error("Error loading my players", err);
       }
     }
-  }, [role, user]);
+  }, [auctionId, role, roomCode, user]);
 
   // Helper: Fetch Teams & Validate My Team
   const loadTeams = useCallback(async () => {
@@ -132,7 +158,7 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
         const mappedTeams = teams.map((t: any) => ({
           id: t._id,
           name: t.name,
-          logo: t.logo || "🏆",
+          logo: t.logo || "Team",
           captain: t.captain || "",
           purse: t.wallet || 0,
           players: playerCounts.get(t._id) || 0,
@@ -554,7 +580,11 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
           <div className="text-right">
             <p className="text-sm text-white/75">Mode</p>
             <p className="text-lg font-bold text-white">
-              {role === "captain" ? "Captain" : "Spectator"}
+              {role === "admin"
+                ? "Admin"
+                : role === "captain"
+                ? "Captain"
+                : "Spectator"}
             </p>
           </div>
         </div>
@@ -756,7 +786,7 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
                       }`}
                     >
                       <div className="flex items-center gap-2 mb-2">
-                        <span className="text-2xl">🏆</span>
+                        <span className="text-xs font-semibold text-amber-400 uppercase">{team.logo}</span>
                         <div className="flex-1 min-w-0">
                           <p className="font-bold text-white truncate">
                             {team.name}

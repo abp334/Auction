@@ -23,6 +23,10 @@ function getMinimumBid(currentPrice: number, hasCurrentBid: boolean) {
   return hasCurrentBid ? currentPrice + BID_INCREMENT : currentPrice;
 }
 
+function buildCaptainPassword(teamName: string) {
+  return teamName.replace(/\s+/g, "");
+}
+
 const importSchema = Joi.object({
   name: Joi.string().min(2).required(),
   teams: Joi.array()
@@ -130,8 +134,10 @@ export async function createAuction(
 
         if (!user) {
           // -> User doesn't exist: Create new Account
-          // Password becomes the Team Name
-          const passwordHash = await hashPassword(inputTeam.name);
+          // Password becomes the team name without spaces, e.g. MumbaiIndians.
+          const passwordHash = await hashPassword(
+            buildCaptainPassword(inputTeam.name)
+          );
 
           user = await User.create({
             name: inputTeam.captain || "Captain",
