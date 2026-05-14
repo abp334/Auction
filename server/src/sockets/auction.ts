@@ -2,10 +2,16 @@ import type { Server, Socket } from "socket.io";
 import { Auction } from "../models/Auction.js";
 import { Team } from "../models/Team.js";
 import { User } from "../models/User.js";
+import { Player } from "../models/Player.js";
 import { resetAuctionTimer } from "../utils/timer.js";
 
 // Simple in-memory dedupe map for socket bids: auctionId:teamId -> timestamp
 const pendingSocketBids = new Map<string, number>();
+const BID_INCREMENT = 1000;
+
+function getMinimumBid(currentPrice: number, hasCurrentBid: boolean) {
+  return hasCurrentBid ? currentPrice + BID_INCREMENT : currentPrice;
+}
 
 export function registerAuctionSocketHandlers(
   io: Server,
@@ -102,11 +108,18 @@ export function registerAuctionSocketHandlers(
         if (!auction || auction.state !== "active") return;
         if (!team) return;
 
-        const minBid = 1000;
-        if (amount < minBid) return;
+        let currentPrice = 0;
+        if (auction.currentBid?.amount) {
+          currentPrice = auction.currentBid.amount;
+        } else {
+          const player = await Player.findById(auction.currentPlayerId)
+            .select("basePrice")
+            .lean();
+          if (!player) return;
+          currentPrice = player.basePrice || 0;
+        }
 
-        // Check current bid locally (fast fail)
-        if (auction.currentBid && amount <= auction.currentBid.amount) return;
+        if (amount < getMinimumBid(currentPrice, !!auction.currentBid)) return;
 
         // Budget enforcement
         if (team.wallet < amount) return;

@@ -5,6 +5,7 @@ import { Team } from "../models/Team.js";
 
 // Store active timers for auctions
 const activeTimers = new Map<string, NodeJS.Timeout>();
+const pendingTimerResets = new Map<string, NodeJS.Timeout>();
 // In-memory per-auction player queues
 export const auctionPlayerQueues = new Map<string, string[]>();
 
@@ -197,14 +198,15 @@ export function stopAuctionTimer(auctionId: string) {
 
 export async function resetAuctionTimer(auctionId: string, roomCode: string) {
   stopAuctionTimer(auctionId);
-  const existingReset = (resetAuctionTimer as any).pendingResets;
+  const existingReset = pendingTimerResets.get(auctionId);
   if (existingReset) {
     clearTimeout(existingReset);
   }
-  (resetAuctionTimer as any).pendingResets = setTimeout(() => {
+  const reset = setTimeout(() => {
     startAuctionTimer(auctionId, roomCode).catch(console.error);
-    (resetAuctionTimer as any).pendingResets = null;
+    pendingTimerResets.delete(auctionId);
   }, 100);
+  pendingTimerResets.set(auctionId, reset);
 }
 
 export async function sellCurrentPlayer(auctionId: string, roomCode: string) {

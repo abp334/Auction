@@ -12,9 +12,16 @@ import {
   stopAuctionTimer,
   resetAuctionTimer,
   initAuctionQueue,
+  moveToNextPlayer,
 } from "../utils/timer.js";
 
 // --- VALIDATION SCHEMAS ---
+
+const BID_INCREMENT = 1000;
+
+function getMinimumBid(currentPrice: number, hasCurrentBid: boolean) {
+  return hasCurrentBid ? currentPrice + BID_INCREMENT : currentPrice;
+}
 
 const importSchema = Joi.object({
   name: Joi.string().min(2).required(),
@@ -337,8 +344,8 @@ export async function placeBid(req: Request, res: Response) {
             .json({ error: "Squad full (Max 25 players)" });
         }
 
-        // --- NEW: DYNAMIC INCREMENT CHECK ---
-        // 1. Get the current "Target Price" (Last Bid OR Base Price)
+        // --- BID INCREMENT CHECK ---
+        // First bid can match base price. Counter-bids move in Rs. 1,000 steps.
         let currentPrice = 0;
         if (auction.currentBid?.amount) {
           currentPrice = auction.currentBid.amount;
@@ -351,26 +358,11 @@ export async function placeBid(req: Request, res: Response) {
           currentPrice = player.basePrice;
         }
 
-        // 2. Calculate Required Increment based on price bracket
-        let minIncrement = 0;
-        if (currentPrice < 1000000) minIncrement = 50000; // Under 10L: +50k
-        else if (currentPrice < 5000000)
-          minIncrement = 200000; // Under 50L: +2L
-        else minIncrement = 500000; // Above 50L: +5L
-
-        // 3. Determine Minimum Valid Bid
-        // If it's the first bid, it just needs to match Base Price.
-        // If it's a counter-bid, it must be Current + Increment.
-        let minValidBid = 0;
-        if (!auction.currentBid) {
-          minValidBid = currentPrice; // First bid can match base price
-        } else {
-          minValidBid = currentPrice + minIncrement;
-        }
+        const minValidBid = getMinimumBid(currentPrice, !!auction.currentBid);
 
         if (value.amount < minValidBid) {
           return res.status(StatusCodes.BAD_REQUEST).json({
-            error: `Bid too low. Minimum required: ₹${minValidBid.toLocaleString()}`,
+            error: `Bid too low. Minimum required: Rs. ${minValidBid.toLocaleString("en-IN")}`,
           });
         }
 
@@ -672,6 +664,8 @@ export async function sellCurrent(req: Request, res: Response) {
     teamName: team.name,
     price: salePrice,
   });
+
+  await moveToNextPlayer(id, auction.roomCode);
 
   return res.status(StatusCodes.OK).json({ auction });
 }

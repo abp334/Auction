@@ -28,6 +28,7 @@ interface Player {
   id: string;
   name: string;
   photo: string;
+  basePrice: number;
   currentBid: number;
   age: number;
   batsmanType: string;
@@ -42,6 +43,16 @@ interface Team {
   purse: number;
   players: number;
 }
+
+const BID_INCREMENT = 1000;
+
+const formatCurrency = (amount: number) =>
+  `₹${amount.toLocaleString("en-IN")}`;
+
+const getNextBidAmount = (player: Player, hasCurrentBid: boolean) =>
+  hasCurrentBid
+    ? (player.currentBid || player.basePrice || 0) + BID_INCREMENT
+    : player.basePrice || player.currentBid || BID_INCREMENT;
 
 const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
   const { toast } = useToast();
@@ -88,6 +99,7 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
               id: p._id,
               name: p.name,
               photo: p.photo || "",
+              basePrice: p.basePrice || 0,
               currentBid: p.basePrice || 0,
               age: p.age || 25,
               batsmanType: p.role || "",
@@ -107,13 +119,23 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
       const tRes = await apiFetch("/teams");
       if (tRes.ok) {
         const { teams } = await tRes.json();
+        const playerCounts = new Map<string, number>();
+        const pRes = await apiFetch("/players");
+        if (pRes.ok) {
+          const { players } = await pRes.json();
+          players.forEach((p: any) => {
+            if (p.teamId && p.teamId !== "UNSOLD") {
+              playerCounts.set(p.teamId, (playerCounts.get(p.teamId) || 0) + 1);
+            }
+          });
+        }
         const mappedTeams = teams.map((t: any) => ({
           id: t._id,
           name: t.name,
           logo: t.logo || "🏆",
           captain: t.captain || "",
           purse: t.wallet || 0,
-          players: 0,
+          players: playerCounts.get(t._id) || 0,
         }));
         setTeams(mappedTeams);
         teamsRef.current = mappedTeams;
@@ -172,27 +194,39 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
         if (pRes.ok) {
           const { player } = await pRes.json();
           setDataError(false);
-          setCurrentPlayer({
+          const nextPlayer = {
             id: player._id,
             name: player.name,
             photo: player.photo || "",
+            basePrice: player.basePrice || 1000,
             currentBid: a.currentBid?.amount || player.basePrice || 1000,
             age: player.age || 25,
             batsmanType: player.role || "",
             bowlerType: player.bowlerType || "Not a Bowler",
-          });
+          };
+          setCurrentPlayer(nextPlayer);
+          return {
+            player: nextPlayer,
+            lastBidTeam: a.currentBid?.teamId || null,
+          };
         } else {
           console.error("Player not found in DB but exists in Auction state.");
           setDataError(true);
-          setCurrentPlayer({
+          const missingPlayer = {
             id: a.currentPlayerId,
             name: "Unknown Player (Data Missing)",
             photo: "",
+            basePrice: 0,
             currentBid: 0,
             age: 0,
             batsmanType: "Unknown",
             bowlerType: "Unknown",
-          });
+          };
+          setCurrentPlayer(missingPlayer);
+          return {
+            player: missingPlayer,
+            lastBidTeam: a.currentBid?.teamId || null,
+          };
         }
       } else {
         setCurrentPlayer(null);
@@ -200,6 +234,7 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
     } catch (err) {
       console.error("Failed to fetch latest auction state", err);
     }
+    return null;
   }, [roomCode]);
 
   // Initial Load
@@ -254,7 +289,7 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
         const teamName = team ? team.name : `Team ${e.teamId.substring(0, 4)}`;
 
         setCommentary((prev) =>
-          [`Bid: $${e.amount.toLocaleString()} by ${teamName}`, ...prev].slice(
+          [`Bid: ${formatCurrency(e.amount)} by ${teamName}`, ...prev].slice(
             0,
             10
           )
@@ -262,6 +297,7 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
 
         setCurrentPlayer((p) => (p ? { ...p, currentBid: e.amount } : null));
         setLastBidTeam(e.teamId);
+        setHasSkipped(false);
         auctionEndTimeRef.current = Date.now() + 30000;
       });
 
@@ -282,6 +318,7 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
           id: e.player.id,
           name: e.player.name,
           photo: e.player.photo || "",
+          basePrice: e.player.basePrice || 1000,
           currentBid: e.player.basePrice || 1000,
           age: e.player.age || 25,
           batsmanType: e.player.role || "",
@@ -304,7 +341,7 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
           [
             `SOLD! ${
               e.playerName
-            } to ${teamName} for $${e.price.toLocaleString()}`,
+            } to ${teamName} for ${formatCurrency(e.price)}`,
             ...prev,
           ].slice(0, 10)
         );
@@ -336,7 +373,9 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
           );
           setLastBidTeam(e.currentBid.teamId);
         } else {
-          setCurrentPlayer((p) => (p ? { ...p, currentBid: 1000 } : null));
+          setCurrentPlayer((p) =>
+            p ? { ...p, currentBid: p.basePrice || 1000 } : null
+          );
           setLastBidTeam(null);
         }
         loadTeams();
@@ -387,15 +426,18 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
     if (!auctionId || !currentPlayer || isBidding || !myTeamId) return;
     setIsBidding(true);
 
-    const newBid = (currentPlayer.currentBid || 0) + 1000;
-
     try {
+      const latest = await fetchLatestAuctionState();
+      const playerForBid = latest?.player || currentPlayer;
+      const hasCurrentBid = Boolean(latest?.lastBidTeam || lastBidTeam);
+      const newBid = getNextBidAmount(playerForBid, hasCurrentBid);
+
       const res = await apiFetch(`/auctions/${auctionId}/bid`, {
         method: "POST",
         body: JSON.stringify({
           amount: newBid,
           teamId: myTeamId,
-          playerId: currentPlayer.id,
+          playerId: playerForBid.id,
         }),
       });
 
@@ -601,7 +643,7 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
                           Current Bid
                         </p>
                         <p className="text-6xl font-bold text-amber-400">
-                          ${currentPlayer.currentBid.toLocaleString()}
+                          {formatCurrency(currentPlayer.currentBid)}
                         </p>
                       </div>
 
@@ -640,7 +682,14 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
                           <Button
                             size="lg"
                             onClick={handleSkip}
-                            disabled={isSkipping}
+                            disabled={
+                              isSkipping ||
+                              timeLeft === 0 ||
+                              !myTeamId ||
+                              !isTeamValid ||
+                              !currentPlayer ||
+                              dataError
+                            }
                             className="bg-amber-600 hover:bg-amber-700 h-14 text-lg font-bold border-2 border-amber-500 text-white"
                           >
                             {isSkipping ? "..." : "Skip"}
@@ -719,7 +768,7 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
                       </div>
                       <div className="flex justify-between text-xs">
                         <span className="text-amber-400 font-bold">
-                          ${team.purse.toLocaleString()}
+                          {formatCurrency(team.purse)}
                         </span>
                         <span className="text-gray-300">
                           {team.players} Players
@@ -766,7 +815,7 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
                               <span>⚾ {player.batsmanType}</span>
                             </div>
                             <p className="text-amber-400 text-sm font-bold mt-1">
-                              ${player.currentBid.toLocaleString()}
+                              {formatCurrency(player.currentBid)}
                             </p>
                           </div>
                         </div>
