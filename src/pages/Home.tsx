@@ -387,95 +387,105 @@ const Home = () => {
       <section id="pricing" className="bg-[#0f1419] py-24 px-4 text-white">
         <div className="container mx-auto max-w-5xl">
           <div className="text-center mb-16">
-            <h2 className="text-4xl font-bold mb-4">Simple Pricing</h2>
+            <h2 className="text-4xl font-bold mb-4">Simple, Transparent Pricing</h2>
             <p className="text-gray-400 text-lg">
-              Pay per team. No hidden fees.
+              One flat rate to get started. Scale affordably as your tournament grows.
             </p>
           </div>
 
           <div className="grid md:grid-cols-2 gap-8 max-w-4xl mx-auto">
-            {/* Small Tournaments */}
-            <Card className="bg-[#1a2332] border-white/10 relative overflow-hidden">
-              <div className="absolute top-0 right-0 bg-blue-600 text-white text-xs font-bold px-3 py-1 rounded-bl-lg">
-                POPULAR
-              </div>
-              <CardHeader className="text-center pb-2">
-                <CardTitle className="text-2xl text-white">
-                  Small Tournaments
-                </CardTitle>
-                <p className="text-gray-400 text-sm">Less than 10 Teams</p>
-              </CardHeader>
-              <CardContent className="text-center pb-8">
-                <div className="flex items-center justify-center gap-1 mb-6">
-                  <span className="text-2xl text-gray-400">₹</span>
-                  <span className="text-6xl font-bold text-white">200</span>
-                  <span className="text-gray-400 self-end mb-2">/team</span>
-                </div>
-                <div className="space-y-4 mb-8 text-left max-w-xs mx-auto">
-                  <div className="flex items-center gap-3">
-                    <CheckCircle className="w-5 h-5 text-blue-500 flex-shrink-0" />
-                    <span className="text-gray-300">Unlimited Players</span>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <CheckCircle className="w-5 h-5 text-blue-500 flex-shrink-0" />
-                    <span className="text-gray-300">Real-time Bidding</span>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <CheckCircle className="w-5 h-5 text-blue-500 flex-shrink-0" />
-                    <span className="text-gray-300">CSV Export</span>
-                  </div>
-                </div>
-                <Button
-                  className="w-full bg-blue-600 hover:bg-blue-700 font-bold h-12"
-                  onClick={() => navigate("/contact")}
-                >
-                  Contact to Buy
-                </Button>
-              </CardContent>
-            </Card>
-
-            {/* Large Tournaments */}
+            {/* Starter - Up to 10 Teams */}
             <Card className="bg-[#1a2332] border-amber-500/30 relative overflow-hidden">
               <div className="absolute top-0 right-0 bg-amber-500 text-black text-xs font-bold px-3 py-1 rounded-bl-lg">
-                BEST VALUE
+                MOST POPULAR
               </div>
               <CardHeader className="text-center pb-2">
                 <CardTitle className="text-2xl text-white">
-                  Large Tournaments
+                  Starter
                 </CardTitle>
-                <p className="text-gray-400 text-sm">10 or more Teams</p>
+                <p className="text-gray-400 text-sm">Up to 10 Teams</p>
               </CardHeader>
               <CardContent className="text-center pb-8">
-                <div className="flex items-center justify-center gap-1 mb-6">
+                <div className="flex items-center justify-center gap-1 mb-2">
                   <span className="text-2xl text-gray-400">₹</span>
-                  <span className="text-6xl font-bold text-amber-500">100</span>
-                  <span className="text-gray-400 self-end mb-2">/team</span>
+                  <span className="text-6xl font-bold text-amber-500">500</span>
                 </div>
+                <p className="text-gray-500 text-sm mb-6">one-time per auction</p>
                 <div className="space-y-4 mb-8 text-left max-w-xs mx-auto">
+                  <div className="flex items-center gap-3">
+                    <CheckCircle className="w-5 h-5 text-amber-500 flex-shrink-0" />
+                    <span className="text-gray-300">Up to 10 Teams included</span>
+                  </div>
                   <div className="flex items-center gap-3">
                     <CheckCircle className="w-5 h-5 text-amber-500 flex-shrink-0" />
                     <span className="text-gray-300">Unlimited Players</span>
                   </div>
                   <div className="flex items-center gap-3">
                     <CheckCircle className="w-5 h-5 text-amber-500 flex-shrink-0" />
-                    <span className="text-gray-300">Priority Support</span>
+                    <span className="text-gray-300">Real-time Live Bidding</span>
                   </div>
                   <div className="flex items-center gap-3">
                     <CheckCircle className="w-5 h-5 text-amber-500 flex-shrink-0" />
-                    <span className="text-gray-300">
-                      Custom Branding Options
-                    </span>
+                    <span className="text-gray-300">CSV Results Export</span>
                   </div>
                 </div>
                 <Button
                   className="w-full bg-amber-500 hover:bg-amber-600 text-black font-bold h-12"
                   onClick={() => navigate("/contact")}
                 >
-                  Contact to Buy
+                  Get Started <ArrowRight className="w-4 h-4 ml-2" />
+                </Button>
+              </CardContent>
+            </Card>
+
+            {/* Pro - 10+ Teams */}
+            <Card className="bg-[#1a2332] border-white/10 relative overflow-hidden">
+              <div className="absolute top-0 right-0 bg-blue-600 text-white text-xs font-bold px-3 py-1 rounded-bl-lg">
+                BEST VALUE
+              </div>
+              <CardHeader className="text-center pb-2">
+                <CardTitle className="text-2xl text-white">
+                  Pro
+                </CardTitle>
+                <p className="text-gray-400 text-sm">More than 10 Teams</p>
+              </CardHeader>
+              <CardContent className="text-center pb-8">
+                <div className="flex items-center justify-center gap-1 mb-2">
+                  <span className="text-2xl text-gray-400">₹</span>
+                  <span className="text-6xl font-bold text-white">500</span>
+                </div>
+                <p className="text-gray-500 text-sm mb-6">+ ₹100 per additional team beyond 10</p>
+                <div className="space-y-4 mb-8 text-left max-w-xs mx-auto">
+                  <div className="flex items-center gap-3">
+                    <CheckCircle className="w-5 h-5 text-blue-500 flex-shrink-0" />
+                    <span className="text-gray-300">Everything in Starter</span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <CheckCircle className="w-5 h-5 text-blue-500 flex-shrink-0" />
+                    <span className="text-gray-300">Unlimited Teams</span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <CheckCircle className="w-5 h-5 text-blue-500 flex-shrink-0" />
+                    <span className="text-gray-300">Priority Support</span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <CheckCircle className="w-5 h-5 text-blue-500 flex-shrink-0" />
+                    <span className="text-gray-300">Custom Branding Options</span>
+                  </div>
+                </div>
+                <Button
+                  className="w-full bg-blue-600 hover:bg-blue-700 font-bold h-12"
+                  onClick={() => navigate("/contact")}
+                >
+                  Contact Sales <ArrowRight className="w-4 h-4 ml-2" />
                 </Button>
               </CardContent>
             </Card>
           </div>
+
+          <p className="text-center text-gray-500 text-sm mt-8">
+            Example: 14 teams = ₹500 + (4 × ₹100) = ₹900 total. No subscriptions, no hidden fees.
+          </p>
         </div>
       </section>
 
@@ -553,7 +563,7 @@ const Home = () => {
               Privacy
             </a>
           </div>
-          <div className="text-sm">&copy; 2025 ClashBid.</div>
+          <div className="text-sm">&copy; 2026 ClashBid.</div>
         </div>
       </footer>
     </div>
