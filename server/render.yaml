@@ -4,8 +4,9 @@ services:
     runtime: node
     region: oregon
     plan: starter
-    buildCommand: cd server && npm ci && npx prisma generate && npm run build
-    startCommand: cd server && npx prisma migrate deploy && npm start
+    rootDir: server
+    buildCommand: npm ci && npx prisma generate && npm run build
+    startCommand: npx prisma db push && npm start
     healthCheckPath: /health
     envVars:
       - key: NODE_ENV
@@ -25,15 +26,13 @@ services:
         generateValue: true
       - key: CLIENT_ORIGIN
         sync: false
+  - type: redis
+    name: bidarena-redis
+    plan: starter
+    maxmemoryPolicy: allkeys-lru
 
 databases:
   - name: bidarena-db
     plan: starter
     databaseName: bidarena
     user: bidarena
-
-services:
-  - type: redis
-    name: bidarena-redis
-    plan: starter
-    maxmemoryPolicy: allkeys-lru
