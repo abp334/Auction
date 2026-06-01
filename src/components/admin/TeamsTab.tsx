@@ -49,7 +49,7 @@ const TeamsTab = () => {
     purse: 100000,
   });
   const [users, setUsers] = useState<
-    Array<{ _id: string; name: string; email: string }>
+    Array<{ id: string; name: string; email: string }>
   >([]);
 
   useEffect(() => {
@@ -60,7 +60,7 @@ const TeamsTab = () => {
         const { teams } = await res.json();
         setTeams(
           teams.map((t: any) => ({
-            id: t._id,
+            id: t.id,
             name: t.name,
             logo: t.logo || "🏆",
             owner: t.owner || "",
@@ -112,7 +112,7 @@ const TeamsTab = () => {
               t.id === editingTeam.id
                 ? {
                     ...formData,
-                    id: team._id,
+                    id: team.id,
                     purse: team.wallet,
                   }
                 : t
@@ -122,7 +122,7 @@ const TeamsTab = () => {
           if (formData.captainId) {
             await apiFetch(`/users/${formData.captainId}/promote`, {
               method: "POST",
-              body: JSON.stringify({ teamId: team._id }),
+              body: JSON.stringify({ teamId: team.id }),
             }).catch(() => {
               /* ignore promote failures - admin can retry */
             });
@@ -151,7 +151,7 @@ const TeamsTab = () => {
             ...ts,
             {
               ...formData,
-              id: team._id,
+              id: team.id,
               purse: team.wallet,
             },
           ]);
@@ -159,7 +159,7 @@ const TeamsTab = () => {
           if (formData.captainId) {
             await apiFetch(`/users/${formData.captainId}/promote`, {
               method: "POST",
-              body: JSON.stringify({ teamId: team._id }),
+              body: JSON.stringify({ teamId: team.id }),
             }).catch(() => {
               /* ignore promote failures - admin can retry */
             });
@@ -310,7 +310,7 @@ const TeamsTab = () => {
                           ...formData,
                           captainId: value,
                           captain:
-                            users.find((u) => u._id === value)?.name || "",
+                            users.find((u) => u.id === value)?.name || "",
                         })
                       }
                     >
@@ -319,7 +319,7 @@ const TeamsTab = () => {
                       </SelectTrigger>
                       <SelectContent>
                         {users.map((u) => (
-                          <SelectItem key={u._id} value={u._id}>
+                          <SelectItem key={u.id} value={u.id}>
                             {u.name} — {u.email}
                           </SelectItem>
                         ))}

@@ -97,7 +97,7 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
           );
           if (auctionRes.ok) {
             const { auctions } = await auctionRes.json();
-            activeAuctionId = auctions[0]?.id || auctions[0]?._id || null;
+            activeAuctionId = auctions[0]?.id || null;
           }
         }
 
@@ -119,11 +119,11 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
           const { players } = await pRes.json();
           setMyTeamPlayers(
             players.map((p: any) => ({
-              id: p.id || p._id,
+              id: p.id,
               name: p.name,
               photo: p.photo || "",
               basePrice: p.basePrice || 0,
-              currentBid: salePrices.get(String(p.id || p._id)) || p.basePrice || 0,
+              currentBid: salePrices.get(String(p.id)) || p.basePrice || 0,
               age: p.age || 25,
               batsmanType: p.role || "",
               bowlerType: p.bowlerType || "Not a Bowler",
@@ -154,7 +154,7 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
           });
         }
         const mappedTeams = teams.map((t: any) => {
-          const tid = t.id || t._id;
+          const tid = t.id;
           return {
             id: tid,
             name: t.name,
@@ -197,7 +197,7 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
       const a = auctions[0];
       if (!a) return;
 
-      setAuctionId(a.id || a._id);
+      setAuctionId(a.id);
 
       // SYNC CLOCK
       if (a.timerEndsAt && a.state === "active") {
@@ -222,7 +222,7 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
           const { player } = await pRes.json();
           setDataError(false);
           const nextPlayer = {
-            id: player.id || player._id,
+            id: player.id,
             name: player.name,
             photo: player.photo || "",
             basePrice: player.basePrice || 1000,

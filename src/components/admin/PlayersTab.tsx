@@ -92,7 +92,7 @@ const PlayersTab = () => {
         const { players } = await res.json();
         setPlayers(
           players.map((p: any) => ({
-            id: p._id,
+            id: p.id,
             name: p.name,
             mobile: p.mobile || "",
             email: p.email || "",
@@ -167,7 +167,7 @@ const PlayersTab = () => {
             ...ps,
             {
               ...formData,
-              id: player._id,
+              id: player.id,
               bidAmount: player.basePrice,
             },
           ]);

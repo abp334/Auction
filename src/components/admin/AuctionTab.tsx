@@ -139,7 +139,7 @@ const AuctionTab = () => {
   // Poll for updates if active
   useEffect(() => {
     if (!currentAuction || currentAuction.state === "completed") return;
-    const aId = currentAuction.id || currentAuction._id;
+    const aId = currentAuction.id;
     const interval = setInterval(async () => {
       const res = await apiFetch(`/auctions/${aId}`);
       if (res.ok) {
@@ -148,7 +148,7 @@ const AuctionTab = () => {
       }
     }, 5000);
     return () => clearInterval(interval);
-  }, [currentAuction?.id, currentAuction?._id, currentAuction?.state]);
+  }, [currentAuction?.id, currentAuction?.state]);
 
   // Gallery Image Handler (Converts file to Base64)
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -285,7 +285,7 @@ const AuctionTab = () => {
     setShowEndConfirm(false);
     setLoading(true);
     try {
-      const aId = currentAuction.id || currentAuction._id;
+      const aId = currentAuction.id;
       const res = await apiFetch(`/auctions/${aId}/close`, {
         method: "POST",
       });
@@ -338,21 +338,21 @@ const AuctionTab = () => {
   };
 
   const startAuction = async () => {
-    const aId = currentAuction.id || currentAuction._id;
+    const aId = currentAuction.id;
     setLoading(true);
     await apiFetch(`/auctions/${aId}/start`, { method: "POST" });
     setLoading(false);
   };
 
   const pauseAuction = async () => {
-    const aId = currentAuction.id || currentAuction._id;
+    const aId = currentAuction.id;
     setLoading(true);
     await apiFetch(`/auctions/${aId}/pause`, { method: "POST" });
     setLoading(false);
   };
 
   const resumeAuction = async () => {
-    const aId = currentAuction.id || currentAuction._id;
+    const aId = currentAuction.id;
     setLoading(true);
     await apiFetch(`/auctions/${aId}/resume`, { method: "POST" });
     setLoading(false);

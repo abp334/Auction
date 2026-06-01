@@ -490,8 +490,8 @@ export async function placeBid(req: Request, res: Response) {
           const current = locked[0];
           if (!current) return null;
           if (
-            current.current_bid_amount !== null &&
-            current.current_bid_amount >= value.amount
+            current.currentBidAmount !== null &&
+            current.currentBidAmount >= value.amount
           ) {
             return null;
           }
@@ -785,17 +785,17 @@ export async function sellCurrent(req: Request, res: Response) {
       id
     );
     const current = locked[0];
-    if (!current || !current.current_bid_amount) return null;
+    if (!current || !current.currentBidAmount) return null;
 
     const team = await tx.team.findUnique({
-      where: { id: current.current_bid_team_id },
+      where: { id: current.currentBidTeamId },
     });
     const player = await tx.player.findUnique({
-      where: { id: current.current_player_id },
+      where: { id: current.currentPlayerId },
     });
     if (!team || !player) return null;
 
-    if (team.wallet < current.current_bid_amount) return null;
+    if (team.wallet < current.currentBidAmount) return null;
 
     const existingSale = await tx.sale.findUnique({
       where: {
@@ -806,7 +806,7 @@ export async function sellCurrent(req: Request, res: Response) {
 
     await tx.team.update({
       where: { id: team.id },
-      data: { wallet: { decrement: current.current_bid_amount } },
+      data: { wallet: { decrement: current.currentBidAmount } },
     });
 
     await tx.player.update({
@@ -819,7 +819,7 @@ export async function sellCurrent(req: Request, res: Response) {
         auctionId: id,
         playerId: player.id,
         teamId: team.id,
-        price: current.current_bid_amount,
+        price: current.currentBidAmount,
       },
     });
 
@@ -834,7 +834,7 @@ export async function sellCurrent(req: Request, res: Response) {
 
     await tx.skippedTeam.deleteMany({ where: { auctionId: id } });
 
-    return { player, team, price: current.current_bid_amount };
+    return { player, team, price: current.currentBidAmount };
   });
 
   if (!result) {

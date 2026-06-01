@@ -141,8 +141,8 @@ export function registerAuctionSocketHandlers(
           const current = locked[0];
           if (!current) return null;
           if (
-            current.current_bid_amount !== null &&
-            current.current_bid_amount >= amount
+            current.currentBidAmount !== null &&
+            current.currentBidAmount >= amount
           )
             return null;
 
