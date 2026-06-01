@@ -1,12 +1,9 @@
 import type { Server, Socket } from "socket.io";
-import { Auction } from "../models/Auction.js";
-import { Team } from "../models/Team.js";
-import { User } from "../models/User.js";
-import { Player } from "../models/Player.js";
+import prisma from "../utils/db.js";
 import { resetAuctionTimer } from "../utils/timer.js";
+import { logger } from "../utils/logger.js";
+import { getRedis } from "../utils/redis.js";
 
-// Simple in-memory dedupe map for socket bids: auctionId:teamId -> timestamp
-const pendingSocketBids = new Map<string, number>();
 const BID_INCREMENT = 1000;
 
 function getMinimumBid(currentPrice: number, hasCurrentBid: boolean) {
@@ -18,7 +15,6 @@ export function registerAuctionSocketHandlers(
   socket: Socket
 ): void {
   socket.on("auction:join", (roomCode: string) => {
-    // console.log(`Socket ${socket.id} joining room ${roomCode}`);
     socket.join(roomCode);
     const socketUser = (socket.data as any)?.user as
       | { id: string; role: string }
@@ -39,9 +35,8 @@ export function registerAuctionSocketHandlers(
       | undefined;
 
     if (!socketUser) {
-      // ADD THIS: Emit error back to client instead of silent failure
       socket.emit("error", {
-        message: "Unauthorized: You must be logged in to bid.",
+        message: "Unauthorized: You must be logged in.",
       });
       return;
     }
@@ -54,7 +49,6 @@ export function registerAuctionSocketHandlers(
     });
   });
 
-  // Accept bids over socket for lower latency; we still persist to DB atomically.
   socket.on(
     "auction:bid",
     async (payload: {
@@ -68,60 +62,65 @@ export function registerAuctionSocketHandlers(
         const { auctionId, roomCode, amount, teamId, playerId } = payload;
         if (!auctionId || !roomCode || !teamId || !amount) return;
 
-        // Authorization: require authenticated user for bids.
         const socketUser = (socket.data as any)?.user as
           | { id: string; role: string }
           | undefined;
-        if (!socketUser) {
-          return;
-        }
+        if (!socketUser) return;
 
-        // If user is captain, ensure they belong to the team they're bidding for.
         if (socketUser.role === "captain") {
-          const socketTeamId = (socket.data as any)?.teamId;
-          let captainTeamId = socketTeamId;
+          let captainTeamId = (socket.data as any)?.teamId;
           if (!captainTeamId) {
-            const dbUser = await User.findById(socketUser.id)
-              .select("teamId")
-              .lean();
+            const dbUser = await prisma.user.findUnique({
+              where: { id: socketUser.id },
+              select: { teamId: true },
+            });
             captainTeamId = dbUser?.teamId;
             (socket.data as any).teamId = captainTeamId;
           }
-          if (!captainTeamId || captainTeamId !== teamId) {
-            return;
-          }
+          if (!captainTeamId || captainTeamId !== teamId) return;
         }
 
+        // Redis-based deduplication (300ms window)
         const dedupeKey = `sockbid:${auctionId}:${teamId}`;
-        const now = Date.now();
-        const last = pendingSocketBids.get(dedupeKey) || 0;
-        if (now - last < 300) return;
-        pendingSocketBids.set(dedupeKey, now);
+        try {
+          const redis = getRedis();
+          const set = await redis.set(dedupeKey, "1", "PX", 300, "NX");
+          if (!set) return;
+        } catch {
+          // If Redis unavailable, skip dedupe
+        }
 
-        // Validate auction and team exist
         const [auction, team] = await Promise.all([
-          Auction.findById(auctionId).select(
-            "state currentBid currentPlayerId roomCode skippedTeams bidHistory"
-          ),
-          Team.findById(teamId).select("wallet name _id"),
+          prisma.auction.findUnique({ where: { id: auctionId } }),
+          prisma.team.findUnique({ where: { id: teamId } }),
         ]);
         if (!auction || auction.state !== "active") return;
         if (!team) return;
 
+        // Squad size check (was missing in socket path before)
+        const currentSquadSize = await prisma.player.count({
+          where: { teamId: team.id },
+        });
+        if (currentSquadSize >= (auction.maxSquadSize || 25)) return;
+
         let currentPrice = 0;
-        if (auction.currentBid?.amount) {
-          currentPrice = auction.currentBid.amount;
-        } else {
-          const player = await Player.findById(auction.currentPlayerId)
-            .select("basePrice")
-            .lean();
+        if (auction.currentBidAmount) {
+          currentPrice = auction.currentBidAmount;
+        } else if (auction.currentPlayerId) {
+          const player = await prisma.player.findUnique({
+            where: { id: auction.currentPlayerId },
+            select: { basePrice: true },
+          });
           if (!player) return;
           currentPrice = player.basePrice || 0;
         }
 
-        if (amount < getMinimumBid(currentPrice, !!auction.currentBid)) return;
+        const increment = auction.bidIncrement || BID_INCREMENT;
+        const minBid = auction.currentBidAmount
+          ? currentPrice + increment
+          : currentPrice;
+        if (amount < minBid) return;
 
-        // Budget enforcement
         if (team.wallet < amount) return;
 
         if (
@@ -131,49 +130,57 @@ export function registerAuctionSocketHandlers(
         )
           return;
 
-        const bid = {
-          teamId,
-          amount,
-          playerId,
-          at: new Date(),
-        };
+        const bidPlayerId = playerId || auction.currentPlayerId!;
+        const now = new Date();
 
-        // Atomic update
-        const updated = await Auction.findOneAndUpdate(
-          {
-            _id: auctionId,
-            $or: [
-              { currentBid: { $exists: false } },
-              { "currentBid.amount": { $lt: amount } },
-            ],
-          },
-          {
-            $set: { currentBid: bid, skippedTeams: [] },
-            $push: { bidHistory: bid },
-          },
-          { new: true }
-        );
+        const updated = await prisma.$transaction(async (tx) => {
+          const locked = await tx.$queryRawUnsafe<any[]>(
+            `SELECT * FROM auctions WHERE id = $1 FOR UPDATE`,
+            auctionId
+          );
+          const current = locked[0];
+          if (!current) return null;
+          if (
+            current.current_bid_amount !== null &&
+            current.current_bid_amount >= amount
+          )
+            return null;
+
+          await tx.bid.create({
+            data: {
+              auctionId,
+              teamId,
+              playerId: bidPlayerId,
+              amount,
+            },
+          });
+
+          await tx.skippedTeam.deleteMany({ where: { auctionId } });
+
+          return tx.auction.update({
+            where: { id: auctionId },
+            data: {
+              currentBidAmount: amount,
+              currentBidTeamId: teamId,
+              currentBidAt: now,
+            },
+          });
+        });
 
         if (!updated) return;
 
-        // Reset timer (non-blocking)
-        resetAuctionTimer(auctionId, updated.roomCode).catch(console.error);
+        resetAuctionTimer(auctionId, updated.roomCode).catch((err) =>
+          logger.error({ err }, "Socket bid timer reset failed")
+        );
 
-        // BROADCAST FIX: Use the roomCode from the DB (updated.roomCode), not the client payload
         io.to(updated.roomCode).emit("auction:bid_update", {
-          amount: bid.amount,
-          teamId: bid.teamId,
-          playerId: bid.playerId,
-          at: bid.at.getTime(),
+          amount,
+          teamId,
+          playerId: bidPlayerId,
+          at: now.getTime(),
         });
       } catch (err) {
-        console.error("Socket bid error:", err);
-      } finally {
-        setTimeout(() => {
-          pendingSocketBids.delete(
-            `sockbid:${payload.auctionId}:${payload.teamId}`
-          );
-        }, 500);
+        logger.error({ err }, "Socket bid error");
       }
     }
   );

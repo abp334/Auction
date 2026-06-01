@@ -10,12 +10,12 @@ import {
   User,
   AlertTriangle,
   RefreshCcw,
+  Wifi,
+  WifiOff,
 } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-import confetti from "canvas-confetti";
-import { io, Socket } from "socket.io-client";
-import { apiFetch } from "@/lib/api";
+import { io, type Socket } from "socket.io-client";
+import { apiFetch, getAccessToken } from "@/lib/api";
 import { useAuth } from "@/hooks/use-auth";
 
 interface AuctionRoomProps {
@@ -62,15 +62,12 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
   const [timeLeft, setTimeLeft] = useState(30);
   const [currentPlayer, setCurrentPlayer] = useState<Player | null>(null);
   const [teams, setTeams] = useState<Team[]>([]);
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const [presentTeamIds, setPresentTeamIds] = useState<string[]>([]);
   const [commentary, setCommentary] = useState<string[]>([
     "Auction started! Waiting for data...",
   ]);
   const [lastBidTeam, setLastBidTeam] = useState<string | null>(null);
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const [showCelebration, setShowCelebration] = useState(false);
   const [hasSkipped, setHasSkipped] = useState(false);
+  const [socketConnected, setSocketConnected] = useState(false);
   const [myTeamPlayers, setMyTeamPlayers] = useState<Player[]>([]);
   const [myTeamId, setMyTeamId] = useState<string | null>(null);
   const [isTeamValid, setIsTeamValid] = useState(true); // Track if team exists
@@ -100,7 +97,7 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
           );
           if (auctionRes.ok) {
             const { auctions } = await auctionRes.json();
-            activeAuctionId = auctions[0]?._id || null;
+            activeAuctionId = auctions[0]?.id || auctions[0]?._id || null;
           }
         }
 
@@ -122,11 +119,11 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
           const { players } = await pRes.json();
           setMyTeamPlayers(
             players.map((p: any) => ({
-              id: p._id,
+              id: p.id || p._id,
               name: p.name,
               photo: p.photo || "",
               basePrice: p.basePrice || 0,
-              currentBid: salePrices.get(String(p._id)) || p.basePrice || 0,
+              currentBid: salePrices.get(String(p.id || p._id)) || p.basePrice || 0,
               age: p.age || 25,
               batsmanType: p.role || "",
               bowlerType: p.bowlerType || "Not a Bowler",
@@ -150,19 +147,23 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
         if (pRes.ok) {
           const { players } = await pRes.json();
           players.forEach((p: any) => {
-            if (p.teamId && p.teamId !== "UNSOLD") {
-              playerCounts.set(p.teamId, (playerCounts.get(p.teamId) || 0) + 1);
+            const tid = p.teamId;
+            if (tid && tid !== "UNSOLD") {
+              playerCounts.set(tid, (playerCounts.get(tid) || 0) + 1);
             }
           });
         }
-        const mappedTeams = teams.map((t: any) => ({
-          id: t._id,
-          name: t.name,
-          logo: t.logo || "Team",
-          captain: t.captain || "",
-          purse: t.wallet || 0,
-          players: playerCounts.get(t._id) || 0,
-        }));
+        const mappedTeams = teams.map((t: any) => {
+          const tid = t.id || t._id;
+          return {
+            id: tid,
+            name: t.name,
+            logo: t.logo || "Team",
+            captain: t.captain || "",
+            purse: t.wallet || 0,
+            players: playerCounts.get(tid) || 0,
+          };
+        });
         setTeams(mappedTeams);
         teamsRef.current = mappedTeams;
 
@@ -196,7 +197,7 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
       const a = auctions[0];
       if (!a) return;
 
-      setAuctionId(a._id);
+      setAuctionId(a.id || a._id);
 
       // SYNC CLOCK
       if (a.timerEndsAt && a.state === "active") {
@@ -221,7 +222,7 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
           const { player } = await pRes.json();
           setDataError(false);
           const nextPlayer = {
-            id: player._id,
+            id: player.id || player._id,
             name: player.name,
             photo: player.photo || "",
             basePrice: player.basePrice || 1000,
@@ -280,35 +281,48 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
   useEffect(() => {
     if (socketRef.current?.connected) return;
 
-    // FIX: Default to 5001 locally if not specified, or fallback to render
     let backendUrl = import.meta.env.VITE_SERVER_URL;
 
     if (
       window.location.hostname === "localhost" ||
       window.location.hostname === "127.0.0.1"
     ) {
-      // Changed to 5001 based on your logs
       backendUrl = "http://localhost:5001";
     } else if (!backendUrl) {
       backendUrl = "https://auction-nsx0.onrender.com";
     }
 
-    console.log("Connecting to Socket.IO at:", backendUrl);
+    const token = getAccessToken();
 
-    import("@/lib/api").then(({ getAccessToken }) => {
-      const token = getAccessToken ? getAccessToken() : null;
+    const s = io(backendUrl, {
+      withCredentials: true,
+      transports: ["websocket", "polling"],
+      auth: { token },
+      reconnection: true,
+      reconnectionAttempts: 20,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 10000,
+    });
 
-      const s = io(backendUrl, {
-        withCredentials: true,
-        transports: ["websocket", "polling"],
-        auth: { token },
-        reconnection: true,
-      });
+    s.on("connect", () => {
+      setSocketConnected(true);
+      s.emit("auction:join", roomCode);
+      fetchLatestAuctionState();
+    });
 
-      s.on("connect", () => {
-        console.log("Socket connected:", s.id);
-        s.emit("auction:join", roomCode);
-      });
+    s.on("disconnect", () => {
+      setSocketConnected(false);
+    });
+
+    s.on("reconnect", () => {
+      const freshToken = getAccessToken();
+      if (freshToken) {
+        s.auth = { token: freshToken };
+      }
+      s.emit("auction:join", roomCode);
+      fetchLatestAuctionState();
+      loadTeams();
+    });
 
       s.on("auction:bid_update", (e: any) => {
         const team = teamsRef.current.find((t) => t.id === e.teamId);
@@ -417,13 +431,12 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
         );
       });
 
-      s.on("auction:ended", (e: any) => {
+      s.on("auction:ended", () => {
         setCommentary((prev) => ["Auction Ended by Admin", ...prev]);
         setTimeout(onExit, 3000);
       });
 
       socketRef.current = s;
-    });
 
     return () => {
       if (socketRef.current) {
@@ -431,7 +444,7 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
         socketRef.current = null;
       }
     };
-  }, [roomCode, loadTeams, loadMyPlayers, onExit]);
+  }, [roomCode, loadTeams, loadMyPlayers, onExit, fetchLatestAuctionState]);
 
   // Local Timer Tick
   useEffect(() => {
@@ -577,15 +590,27 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
               </p>
             </div>
           </div>
-          <div className="text-right">
-            <p className="text-sm text-white/75">Mode</p>
-            <p className="text-lg font-bold text-white">
-              {role === "admin"
-                ? "Admin"
-                : role === "captain"
-                ? "Captain"
-                : "Spectator"}
-            </p>
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2">
+              {socketConnected ? (
+                <Wifi className="w-4 h-4 text-green-400" />
+              ) : (
+                <WifiOff className="w-4 h-4 text-red-400 animate-pulse" />
+              )}
+              <span className={`text-xs ${socketConnected ? "text-green-400" : "text-red-400"}`}>
+                {socketConnected ? "Live" : "Reconnecting..."}
+              </span>
+            </div>
+            <div className="text-right">
+              <p className="text-sm text-white/75">Mode</p>
+              <p className="text-lg font-bold text-white">
+                {role === "admin"
+                  ? "Admin"
+                  : role === "captain"
+                  ? "Captain"
+                  : "Spectator"}
+              </p>
+            </div>
           </div>
         </div>
       </header>
@@ -614,11 +639,7 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
               </div>
             )}
 
-            <Card
-              className={`border-4 bg-[#0f1419] ${
-                showCelebration ? "border-amber-500" : "border-amber-500/50"
-              }`}
-            >
+            <Card className="border-4 bg-[#0f1419] border-amber-500/50">
               <CardContent className="flex flex-col items-center justify-center p-8 min-h-[500px]">
                 {!currentPlayer ? (
                   <div className="text-center space-y-6">

@@ -1,133 +1,126 @@
 import { getIO } from "../sockets/io.js";
-import { Auction } from "../models/Auction.js";
-import { Player } from "../models/Player.js";
-import { Team } from "../models/Team.js";
+import prisma from "./db.js";
+import { logger } from "./logger.js";
+import { acquireLock, releaseLock } from "./redis.js";
 
-// Store active timers for auctions
 const activeTimers = new Map<string, NodeJS.Timeout>();
 const pendingTimerResets = new Map<string, NodeJS.Timeout>();
-// In-memory per-auction player queues
 export const auctionPlayerQueues = new Map<string, string[]>();
 
 export async function initAuctionQueue(auctionId: string) {
   try {
-    const auction = await Auction.findById(auctionId).select(
-      "players sales unsoldPlayers"
-    );
-    if (!auction) return;
-    const soldPlayerIds = (auction.sales || []).map((s: any) => s.playerId);
-    const excludeIds = [...soldPlayerIds, ...(auction.unsoldPlayers || [])];
+    const auctionPlayers = await prisma.auctionPlayer.findMany({
+      where: { auctionId },
+      orderBy: { sortOrder: "asc" },
+      select: { playerId: true },
+    });
 
-    const players = await Player.find({
-      $or: [
-        { teamId: { $exists: false } },
-        { teamId: null },
-        { teamId: "" },
-        { teamId: "UNSOLD" },
-      ],
-      _id: { $nin: excludeIds },
-    })
-      .select("_id")
-      .sort({ _id: 1 })
-      .lean();
+    const sales = await prisma.sale.findMany({
+      where: { auctionId },
+      select: { playerId: true },
+    });
 
-    auctionPlayerQueues.set(
-      auctionId,
-      players.map((p: any) => (p._id || p.id).toString())
+    const unsold = await prisma.unsoldPlayer.findMany({
+      where: { auctionId },
+      select: { playerId: true },
+    });
+
+    const soldIds = new Set(sales.map((s) => s.playerId));
+    const unsoldIds = new Set(unsold.map((u) => u.playerId));
+
+    const soldPlayerInfo = await prisma.player.findMany({
+      where: { id: { in: auctionPlayers.map((ap) => ap.playerId) } },
+      select: { id: true, teamId: true },
+    });
+    const assignedIds = new Set(
+      soldPlayerInfo.filter((p) => p.teamId !== null).map((p) => p.id)
     );
+
+    const queue = auctionPlayers
+      .map((ap) => ap.playerId)
+      .filter(
+        (pid) => !soldIds.has(pid) && !unsoldIds.has(pid) && !assignedIds.has(pid)
+      );
+
+    auctionPlayerQueues.set(auctionId, queue);
   } catch (err) {
-    console.error("Failed to init auction queue:", err);
+    logger.error({ err, auctionId }, "Failed to init auction queue");
   }
 }
 
-/**
- * RESTORE TIMERS ON SERVER RESTART
- * This finds any "active" auctions with a future "timerEndsAt"
- * and spins up the loop again without resetting the clock.
- */
 export async function restoreActiveTimers() {
   try {
-    const activeAuctions = await Auction.find({
-      state: "active",
-      timerEndsAt: { $exists: true, $ne: null },
-      currentPlayerId: { $exists: true, $ne: null },
+    const activeAuctions = await prisma.auction.findMany({
+      where: {
+        state: "active",
+        timerEndsAt: { not: null },
+        currentPlayerId: { not: null },
+      },
     });
 
-    console.log(
-      `Checking ${activeAuctions.length} active auctions for timer restoration...`
+    logger.info(
+      { count: activeAuctions.length },
+      "Checking active auctions for timer restoration"
     );
 
     for (const auction of activeAuctions) {
-      // TS FIX: Ensure timerEndsAt exists before using it
       if (!auction.currentPlayerId || !auction.timerEndsAt) continue;
 
       const endTime = new Date(auction.timerEndsAt).getTime();
       const duration = auction.timerDuration || 30;
 
-      // If timer has valid data, restart the internal loop
       if (endTime > 0) {
-        console.log(`Restoring timer for auction: ${auction.name}`);
-        // We pass the EXISTING endTime so we don't reset the clock
-        runTimerLoop(
-          (auction._id as any).toString(),
-          auction.roomCode,
-          endTime,
-          duration
-        );
+        logger.info({ name: auction.name }, "Restoring timer for auction");
+        await initAuctionQueue(auction.id);
+        runTimerLoop(auction.id, auction.roomCode, endTime, duration);
       }
     }
   } catch (err) {
-    console.error("Failed to restore timers:", err);
+    logger.error({ err }, "Failed to restore timers");
   }
 }
 
 export async function startAuctionTimer(auctionId: string, roomCode: string) {
-  // Clear existing timer if any
   stopAuctionTimer(auctionId);
 
-  const auction = await Auction.findById(auctionId).select(
-    "state currentPlayerId timerDuration"
-  );
-  if (!auction || auction.state !== "active" || !auction.currentPlayerId) {
-    return;
-  }
-
-  // Use configured duration or default to 30s
-  const duration = auction.timerDuration || 30;
-
-  // Calculate Absolute End Time
-  const startTime = new Date();
-  const endTimeMilliseconds = Date.now() + duration * 1000;
-
-  // Update auction in DB
-  await Auction.findByIdAndUpdate(auctionId, {
-    timerStart: startTime,
-    timerEndsAt: new Date(endTimeMilliseconds),
-    $set: { skippedTeams: [] },
+  const auction = await prisma.auction.findUnique({
+    where: { id: auctionId },
+    select: { state: true, currentPlayerId: true, timerDuration: true },
   });
+
+  if (!auction || auction.state !== "active" || !auction.currentPlayerId)
+    return;
+
+  const duration = auction.timerDuration || 30;
+  const startTime = new Date();
+  const endTimeMs = Date.now() + duration * 1000;
+
+  await prisma.auction.update({
+    where: { id: auctionId },
+    data: {
+      timerStart: startTime,
+      timerEndsAt: new Date(endTimeMs),
+    },
+  });
+
+  await prisma.skippedTeam.deleteMany({ where: { auctionId } });
 
   const io = getIO();
   io.to(roomCode).emit("auction:timer", {
     timeLeft: duration,
     totalTime: duration,
-    endTime: endTimeMilliseconds,
+    endTime: endTimeMs,
   });
 
-  // Start the actual interval loop
-  runTimerLoop(auctionId, roomCode, endTimeMilliseconds, duration);
+  runTimerLoop(auctionId, roomCode, endTimeMs, duration);
 }
 
-/**
- * Shared Internal Loop Logic
- * Used by both startAuctionTimer (new timer) and restoreActiveTimers (server restart)
- */
 function runTimerLoop(
   auctionId: string,
   roomCode: string,
-  endTimeMilliseconds: number,
+  endTimeMs: number,
   totalDuration: number
 ) {
-  // Clear just in case
   if (activeTimers.has(auctionId)) {
     clearInterval(activeTimers.get(auctionId));
   }
@@ -137,55 +130,347 @@ function runTimerLoop(
   const timer = setInterval(async () => {
     const now = Date.now();
 
-    // Check if we have passed the end time
-    if (now >= endTimeMilliseconds) {
+    if (now >= endTimeMs) {
       clearInterval(timer);
       activeTimers.delete(auctionId);
-
-      // --- EXPIRY LOGIC ---
-      const updatedAuction = await Auction.findById(auctionId).select(
-        "state currentBid currentPlayerId skippedTeams teams"
+      handleTimerExpiry(auctionId, roomCode).catch((err) =>
+        logger.error({ err, auctionId }, "Timer expiry handler failed")
       );
-      if (!updatedAuction || updatedAuction.state !== "active") return;
-
-      const teams = await Team.find({ _id: { $in: updatedAuction.teams } })
-        .select("captainId _id")
-        .lean();
-      const captainTeams = teams
-        .filter((t: any) => t.captainId)
-        .map((t: any) => (t._id || t.id).toString());
-
-      const allSkipped =
-        captainTeams.length > 0 &&
-        captainTeams.every((tid) => updatedAuction.skippedTeams?.includes(tid));
-
-      const currentBidderSkipped =
-        updatedAuction.currentBid &&
-        updatedAuction.skippedTeams?.includes(updatedAuction.currentBid.teamId);
-
-      const hasBid =
-        updatedAuction.currentBid && updatedAuction.currentBid.amount >= 1000;
-
-      if (allSkipped || currentBidderSkipped) {
-        markPlayerUnsold(auctionId, roomCode).catch(console.error);
-      } else if (hasBid) {
-        sellCurrentPlayer(auctionId, roomCode).catch(console.error);
-      } else {
-        markPlayerUnsold(auctionId, roomCode).catch(console.error);
-      }
-    } else {
-      // Periodic Sync (Every 5 seconds) to keep drifters in check
-      if (Math.floor((endTimeMilliseconds - now) / 1000) % 5 === 0) {
-        io.to(roomCode).emit("auction:timer", {
-          timeLeft: Math.floor((endTimeMilliseconds - now) / 1000),
-          totalTime: totalDuration,
-          endTime: endTimeMilliseconds,
-        });
-      }
+    } else if (Math.floor((endTimeMs - now) / 1000) % 5 === 0) {
+      io.to(roomCode).emit("auction:timer", {
+        timeLeft: Math.floor((endTimeMs - now) / 1000),
+        totalTime: totalDuration,
+        endTime: endTimeMs,
+      });
     }
   }, 1000);
 
   activeTimers.set(auctionId, timer);
+}
+
+async function handleTimerExpiry(auctionId: string, roomCode: string) {
+  const lockKey = `lock:timer:${auctionId}`;
+  const acquired = await acquireLock(lockKey, 10000);
+  if (!acquired) {
+    logger.warn({ auctionId }, "Timer expiry lock not acquired, skipping");
+    return;
+  }
+
+  try {
+    const auction = await prisma.auction.findUnique({
+      where: { id: auctionId },
+      include: {
+        skippedTeams: true,
+        teams: { include: { team: { select: { id: true, captainId: true } } } },
+      },
+    });
+
+    if (!auction || auction.state !== "active") return;
+
+    const captainTeamIds = auction.teams
+      .filter((at) => at.team.captainId)
+      .map((at) => at.teamId);
+
+    const allSkipped =
+      captainTeamIds.length > 0 &&
+      captainTeamIds.every((tid) =>
+        auction.skippedTeams.some((st) => st.teamId === tid)
+      );
+
+    const currentBidderSkipped =
+      auction.currentBidTeamId &&
+      auction.skippedTeams.some(
+        (st) => st.teamId === auction.currentBidTeamId
+      );
+
+    const hasBid = auction.currentBidAmount && auction.currentBidAmount >= 1000;
+
+    if (allSkipped || currentBidderSkipped) {
+      await markPlayerUnsold(auctionId, roomCode);
+    } else if (hasBid) {
+      await sellCurrentPlayer(auctionId, roomCode);
+    } else {
+      await markPlayerUnsold(auctionId, roomCode);
+    }
+  } finally {
+    await releaseLock(lockKey);
+  }
+}
+
+export async function sellCurrentPlayer(auctionId: string, roomCode: string) {
+  const result = await prisma.$transaction(async (tx) => {
+    const auction = await tx.$queryRawUnsafe<any[]>(
+      `SELECT * FROM auctions WHERE id = $1 FOR UPDATE`,
+      auctionId
+    );
+    const current = auction[0];
+    if (
+      !current ||
+      !current.current_player_id ||
+      !current.current_bid_amount ||
+      !current.current_bid_team_id
+    )
+      return null;
+
+    const existingSale = await tx.sale.findUnique({
+      where: {
+        auctionId_playerId: {
+          auctionId,
+          playerId: current.current_player_id,
+        },
+      },
+    });
+    if (existingSale) return null;
+
+    const team = await tx.team.findUnique({
+      where: { id: current.current_bid_team_id },
+    });
+    if (!team || team.wallet < current.current_bid_amount) return null;
+
+    const player = await tx.player.findUnique({
+      where: { id: current.current_player_id },
+    });
+    if (!player || (player.teamId && player.teamId !== null)) return null;
+
+    await tx.team.update({
+      where: { id: team.id },
+      data: { wallet: { decrement: current.current_bid_amount } },
+    });
+
+    await tx.player.update({
+      where: { id: player.id },
+      data: { teamId: team.id },
+    });
+
+    await tx.sale.create({
+      data: {
+        auctionId,
+        playerId: player.id,
+        teamId: team.id,
+        price: current.current_bid_amount,
+      },
+    });
+
+    await tx.auction.update({
+      where: { id: auctionId },
+      data: {
+        currentBidAmount: null,
+        currentBidTeamId: null,
+        currentBidAt: null,
+      },
+    });
+
+    await tx.skippedTeam.deleteMany({ where: { auctionId } });
+
+    return { player, team, price: current.current_bid_amount as number };
+  });
+
+  if (!result) return;
+
+  const io = getIO();
+  io.to(roomCode).emit("auction:sale", {
+    playerId: result.player.id,
+    playerName: result.player.name,
+    teamId: result.team.id,
+    teamName: result.team.name,
+    price: result.price,
+    saleType: "sold",
+  });
+
+  await moveToNextPlayer(auctionId, roomCode);
+}
+
+export async function markPlayerUnsold(auctionId: string, roomCode: string) {
+  const auction = await prisma.auction.findUnique({
+    where: { id: auctionId },
+    select: { currentPlayerId: true },
+  });
+  if (!auction?.currentPlayerId) return;
+
+  const player = await prisma.player.findUnique({
+    where: { id: auction.currentPlayerId },
+  });
+  if (!player) return;
+
+  await prisma.unsoldPlayer.upsert({
+    where: {
+      auctionId_playerId: { auctionId, playerId: player.id },
+    },
+    create: { auctionId, playerId: player.id },
+    update: {},
+  });
+
+  await prisma.player.update({
+    where: { id: player.id },
+    data: { isUnsold: true },
+  });
+
+  await prisma.auction.update({
+    where: { id: auctionId },
+    data: {
+      currentBidAmount: null,
+      currentBidTeamId: null,
+      currentBidAt: null,
+    },
+  });
+
+  await prisma.skippedTeam.deleteMany({ where: { auctionId } });
+
+  const io = getIO();
+  io.to(roomCode).emit("auction:unsold", {
+    playerId: player.id,
+    playerName: player.name,
+  });
+
+  await moveToNextPlayer(auctionId, roomCode);
+}
+
+export async function moveToNextPlayer(auctionId: string, roomCode: string) {
+  const auction = await prisma.auction.findUnique({
+    where: { id: auctionId },
+    select: { timerDuration: true, state: true },
+  });
+  if (!auction || auction.state !== "active") return;
+
+  let queue = auctionPlayerQueues.get(auctionId) || [];
+
+  const sales = await prisma.sale.findMany({
+    where: { auctionId },
+    select: { playerId: true },
+  });
+  const unsold = await prisma.unsoldPlayer.findMany({
+    where: { auctionId },
+    select: { playerId: true },
+  });
+
+  const soldIds = new Set(sales.map((s) => s.playerId));
+  const unsoldIds = new Set(unsold.map((u) => u.playerId));
+
+  let nextPlayerId: string | null = null;
+  while (queue.length > 0) {
+    const candidateId = queue.shift()!;
+    if (soldIds.has(candidateId) || unsoldIds.has(candidateId)) continue;
+
+    const p = await prisma.player.findUnique({
+      where: { id: candidateId },
+      select: { teamId: true },
+    });
+    if (p && p.teamId) continue;
+
+    nextPlayerId = candidateId;
+    break;
+  }
+
+  auctionPlayerQueues.set(auctionId, queue);
+
+  const duration = auction.timerDuration || 30;
+  const endTimeMs = Date.now() + duration * 1000;
+
+  if (nextPlayerId) {
+    const player = await prisma.player.findUnique({
+      where: { id: nextPlayerId },
+    });
+
+    await prisma.auction.update({
+      where: { id: auctionId },
+      data: {
+        currentPlayerId: nextPlayerId,
+        currentBidAmount: null,
+        currentBidTeamId: null,
+        currentBidAt: null,
+        timerStart: new Date(),
+      },
+    });
+
+    await prisma.skippedTeam.deleteMany({ where: { auctionId } });
+    await startAuctionTimer(auctionId, roomCode);
+
+    const io = getIO();
+    io.to(roomCode).emit("auction:player_changed", {
+      playerId: nextPlayerId,
+      player: player
+        ? {
+            id: player.id,
+            name: player.name,
+            photo: player.photo || "",
+            age: player.age || 25,
+            role: player.role || "",
+            bowlerType: player.bowlerType || "",
+            basePrice: player.basePrice || 1000,
+          }
+        : null,
+      timerEndTime: endTimeMs,
+      remainingTime: duration,
+    });
+    return;
+  }
+
+  // Fallback: scan DB for any remaining unassigned players
+  const auctionPlayers = await prisma.auctionPlayer.findMany({
+    where: { auctionId },
+    select: { playerId: true },
+  });
+
+  const remaining = await prisma.player.findFirst({
+    where: {
+      id: { in: auctionPlayers.map((ap) => ap.playerId) },
+      teamId: null,
+      isUnsold: false,
+      NOT: {
+        id: { in: [...soldIds, ...unsoldIds] },
+      },
+    },
+    orderBy: { createdAt: "asc" },
+  });
+
+  if (remaining) {
+    await prisma.auction.update({
+      where: { id: auctionId },
+      data: {
+        currentPlayerId: remaining.id,
+        currentBidAmount: null,
+        currentBidTeamId: null,
+        currentBidAt: null,
+        timerStart: new Date(),
+      },
+    });
+
+    await prisma.skippedTeam.deleteMany({ where: { auctionId } });
+    await startAuctionTimer(auctionId, roomCode);
+
+    const io = getIO();
+    io.to(roomCode).emit("auction:player_changed", {
+      playerId: remaining.id,
+      player: {
+        id: remaining.id,
+        name: remaining.name,
+        photo: remaining.photo || "",
+        age: remaining.age || 25,
+        role: remaining.role || "",
+        bowlerType: remaining.bowlerType || "",
+        basePrice: remaining.basePrice || 1000,
+      },
+      timerEndTime: endTimeMs,
+      remainingTime: duration,
+    });
+  } else {
+    await prisma.auction.update({
+      where: { id: auctionId },
+      data: {
+        state: "completed",
+        currentPlayerId: null,
+        currentBidAmount: null,
+        currentBidTeamId: null,
+      },
+    });
+
+    stopAuctionTimer(auctionId);
+
+    const io = getIO();
+    io.to(roomCode).emit("auction:completed", {
+      message: "All players have been sold or skipped!",
+    });
+  }
 }
 
 export function stopAuctionTimer(auctionId: string) {
@@ -199,237 +484,14 @@ export function stopAuctionTimer(auctionId: string) {
 export async function resetAuctionTimer(auctionId: string, roomCode: string) {
   stopAuctionTimer(auctionId);
   const existingReset = pendingTimerResets.get(auctionId);
-  if (existingReset) {
-    clearTimeout(existingReset);
-  }
+  if (existingReset) clearTimeout(existingReset);
+
   const reset = setTimeout(() => {
-    startAuctionTimer(auctionId, roomCode).catch(console.error);
+    startAuctionTimer(auctionId, roomCode).catch((err) =>
+      logger.error({ err, auctionId }, "Reset timer failed")
+    );
     pendingTimerResets.delete(auctionId);
   }, 100);
+
   pendingTimerResets.set(auctionId, reset);
-}
-
-export async function sellCurrentPlayer(auctionId: string, roomCode: string) {
-  const auction = await Auction.findById(auctionId).select(
-    "currentPlayerId currentBid sales roomCode"
-  );
-  if (!auction || !auction.currentPlayerId || !auction.currentBid) return;
-
-  const alreadySold = auction.sales.some(
-    (sale: any) => sale.playerId === auction.currentPlayerId
-  );
-  if (alreadySold) return;
-
-  const team = await Team.findById(auction.currentBid.teamId).select(
-    "wallet name _id"
-  );
-  if (!team) return;
-
-  const player = await Player.findById(auction.currentPlayerId).select(
-    "name _id teamId"
-  );
-  if (!player) return;
-
-  if (player.teamId && player.teamId !== "UNSOLD") return;
-
-  const salePrice = auction.currentBid.amount;
-  if (team.wallet < salePrice) return;
-
-  const updatedTeam = await Team.findByIdAndUpdate(
-    auction.currentBid.teamId,
-    { $inc: { wallet: -salePrice } },
-    { new: true }
-  );
-  if (!updatedTeam) return;
-
-  player.teamId = (team as any)._id.toString();
-  await player.save();
-
-  const updatedAuction = await Auction.findById(auctionId);
-  if (!updatedAuction) return;
-
-  const stillUnsold = !updatedAuction.sales.some(
-    (sale: any) => sale.playerId === auction.currentPlayerId
-  );
-
-  if (stillUnsold) {
-    updatedAuction.sales.push({
-      playerId: (player as any)._id.toString(),
-      teamId: (team as any)._id.toString(),
-      price: salePrice,
-      at: new Date(),
-    });
-    updatedAuction.currentBid = undefined;
-    updatedAuction.skippedTeams = [];
-    await updatedAuction.save();
-  } else {
-    return;
-  }
-
-  const io = getIO();
-  io.to(roomCode).emit("auction:sale", {
-    playerId: (player as any)._id.toString(),
-    playerName: player.name,
-    teamId: (updatedTeam as any)._id.toString(),
-    teamName: updatedTeam.name,
-    price: salePrice,
-    saleType: "sold",
-  });
-
-  await moveToNextPlayer(auctionId, roomCode);
-}
-
-export async function markPlayerUnsold(auctionId: string, roomCode: string) {
-  const auction = await Auction.findById(auctionId).select(
-    "currentPlayerId skippedTeams currentBid unsoldPlayers"
-  );
-  if (!auction || !auction.currentPlayerId) return;
-
-  const player = await Player.findById(auction.currentPlayerId).select(
-    "name _id"
-  );
-  if (!player) return;
-
-  const playerId = player.id || (player as any)._id.toString();
-  if (!auction.unsoldPlayers) {
-    auction.unsoldPlayers = [];
-  }
-  if (!auction.unsoldPlayers.includes(playerId)) {
-    auction.unsoldPlayers.push(playerId);
-  }
-
-  auction.skippedTeams = [];
-  auction.currentBid = undefined;
-  await auction.save();
-
-  const io = getIO();
-  io.to(roomCode).emit("auction:unsold", {
-    playerId: (player as any)._id.toString(),
-    playerName: player.name,
-  });
-
-  await moveToNextPlayer(auctionId, roomCode);
-}
-
-export async function moveToNextPlayer(auctionId: string, roomCode: string) {
-  const auction = await Auction.findById(auctionId);
-  if (!auction) return;
-
-  const queue = auctionPlayerQueues.get(auctionId) || [];
-  let nextPlayerId: string | null = null;
-
-  while (queue.length > 0) {
-    const candidateId = queue.shift() as string;
-    const soldPlayerIds = (auction.sales || []).map((s: any) => s.playerId);
-    if (
-      soldPlayerIds.includes(candidateId) ||
-      (auction.unsoldPlayers || []).includes(candidateId)
-    ) {
-      continue;
-    }
-    nextPlayerId = candidateId;
-    break;
-  }
-
-  auctionPlayerQueues.set(auctionId, queue);
-
-  // Calculate End Time for the new player
-  const duration = auction.timerDuration || 30;
-  const endTimeMilliseconds = Date.now() + duration * 1000;
-
-  if (nextPlayerId) {
-    const nextUnsoldPlayer = await Player.findById(nextPlayerId).select(
-      "_id name photo age role bowlerType basePrice teamId"
-    );
-    if (nextUnsoldPlayer) {
-      auction.currentPlayerId = nextPlayerId;
-      auction.currentBid = undefined;
-      auction.skippedTeams = [];
-      auction.timerStart = new Date();
-      await auction.save();
-
-      await startAuctionTimer(auctionId, roomCode);
-
-      const io = getIO();
-      io.to(roomCode).emit("auction:player_changed", {
-        playerId: nextPlayerId,
-        player: {
-          id: nextPlayerId,
-          name: nextUnsoldPlayer.name,
-          photo: nextUnsoldPlayer.photo || "",
-          age: nextUnsoldPlayer.age || 25,
-          role: nextUnsoldPlayer.role || "",
-          bowlerType: nextUnsoldPlayer.bowlerType || "",
-          basePrice: nextUnsoldPlayer.basePrice || 1000,
-        },
-        // Broadcast absolute end time so client starts immediately
-        timerEndTime: endTimeMilliseconds,
-        remainingTime: duration,
-      });
-      return;
-    }
-  }
-
-  // Fallback DB Scan
-  const soldPlayerIds = (auction.sales || []).map((s: any) => s.playerId);
-  const nextUnsoldPlayer = await Player.findOne({
-    $or: [
-      { teamId: { $exists: false } },
-      { teamId: null },
-      { teamId: "" },
-      { teamId: "UNSOLD" },
-    ],
-    _id: {
-      $ne: auction.currentPlayerId,
-      $nin: [...soldPlayerIds, ...(auction.unsoldPlayers || [])],
-    },
-  })
-    .select("_id name photo age role bowlerType basePrice teamId")
-    .sort({ _id: 1 });
-
-  if (nextUnsoldPlayer) {
-    const playerId =
-      nextUnsoldPlayer.id || (nextUnsoldPlayer as any)._id.toString();
-    if (
-      !soldPlayerIds.includes(playerId) &&
-      !auction.unsoldPlayers?.includes(playerId)
-    ) {
-      auction.currentPlayerId = playerId;
-      auction.currentBid = undefined;
-      auction.skippedTeams = [];
-      auction.timerStart = new Date();
-      await auction.save();
-
-      await startAuctionTimer(auctionId, roomCode);
-
-      const io = getIO();
-      io.to(roomCode).emit("auction:player_changed", {
-        playerId: playerId,
-        player: {
-          id: playerId,
-          name: nextUnsoldPlayer.name,
-          photo: nextUnsoldPlayer.photo || "",
-          age: nextUnsoldPlayer.age || 25,
-          role: nextUnsoldPlayer.role || "",
-          bowlerType: nextUnsoldPlayer.bowlerType || "",
-          basePrice: nextUnsoldPlayer.basePrice || 1000,
-        },
-        timerEndTime: endTimeMilliseconds,
-        remainingTime: duration,
-      });
-    }
-  } else {
-    auction.state = "completed";
-    auction.currentPlayerId = undefined;
-    auction.skippedTeams = [];
-    auction.currentBid = undefined;
-    await auction.save();
-
-    stopAuctionTimer(auctionId);
-
-    const io = getIO();
-    io.to(roomCode).emit("auction:completed", {
-      message: "All players have been sold or skipped!",
-    });
-  }
 }

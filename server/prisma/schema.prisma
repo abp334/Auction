@@ -1,0 +1,204 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserRole {
+  admin
+  captain
+  player
+}
+
+enum AuctionState {
+  draft
+  active
+  paused
+  completed
+}
+
+model User {
+  id               String    @id @default(uuid())
+  email            String    @unique
+  passwordHash     String
+  name             String
+  role             UserRole  @default(player)
+  teamId           String?
+  team             Team?     @relation("TeamMembers", fields: [teamId], references: [id], onDelete: SetNull)
+  refreshTokenHash String?
+  emailVerified    Boolean   @default(false)
+  otpHash          String?
+  otpExpires       DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  captainOfTeam Team?     @relation("TeamCaptain")
+  createdAuctions Auction[] @relation("AuctionCreator")
+
+  @@index([email])
+  @@index([teamId])
+  @@map("users")
+}
+
+model Team {
+  id        String   @id @default(uuid())
+  name      String
+  wallet    Int      @default(0)
+  captainId String?  @unique
+  captainUser User?  @relation("TeamCaptain", fields: [captainId], references: [id], onDelete: SetNull)
+  logo      String?
+  owner     String?
+  mobile    String?
+  email     String?
+  captain   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  members        User[]          @relation("TeamMembers")
+  players        Player[]
+  auctionTeams   AuctionTeam[]
+  bids           Bid[]
+  sales          Sale[]
+  skippedInRounds SkippedTeam[]
+  currentBidOn   Auction[]       @relation("CurrentBidTeam")
+
+  @@index([name])
+  @@map("teams")
+}
+
+model Player {
+  id          String   @id @default(uuid())
+  name        String
+  role        String
+  basePrice   Int      @default(0)
+  teamId      String?
+  team        Team?    @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  photo       String?
+  mobile      String?
+  email       String?
+  age         Int?
+  batsmanType String?
+  bowlerType  String?
+  stats       Json?
+  isUnsold    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  auctionPlayers  AuctionPlayer[]
+  bids            Bid[]
+  sales           Sale[]
+  unsoldInAuctions UnsoldPlayer[]
+  currentInAuction Auction[]       @relation("CurrentPlayer")
+
+  @@index([teamId])
+  @@map("players")
+}
+
+model Auction {
+  id               String       @id @default(uuid())
+  name             String
+  roomCode         String       @unique
+  state            AuctionState @default(draft)
+  currentPlayerId  String?
+  currentPlayer    Player?      @relation("CurrentPlayer", fields: [currentPlayerId], references: [id], onDelete: SetNull)
+  currentBidAmount Int?
+  currentBidTeamId String?
+  currentBidTeam   Team?        @relation("CurrentBidTeam", fields: [currentBidTeamId], references: [id], onDelete: SetNull)
+  currentBidAt     DateTime?
+  timerStart       DateTime?
+  timerDuration    Int          @default(30)
+  timerEndsAt      DateTime?
+  bidIncrement     Int          @default(1000)
+  maxSquadSize     Int          @default(25)
+  createdById      String?
+  createdBy        User?        @relation("AuctionCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  teams          AuctionTeam[]
+  players        AuctionPlayer[]
+  bids           Bid[]
+  sales          Sale[]
+  unsoldPlayers  UnsoldPlayer[]
+  skippedTeams   SkippedTeam[]
+
+  @@index([roomCode])
+  @@index([state])
+  @@index([state, currentPlayerId])
+  @@map("auctions")
+}
+
+model AuctionTeam {
+  auctionId String
+  auction   Auction @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+  teamId    String
+  team      Team    @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@id([auctionId, teamId])
+  @@map("auction_teams")
+}
+
+model AuctionPlayer {
+  auctionId String
+  auction   Auction @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+  playerId  String
+  player    Player  @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  sortOrder Int     @default(0)
+
+  @@id([auctionId, playerId])
+  @@map("auction_players")
+}
+
+model Bid {
+  id        String   @id @default(uuid())
+  auctionId String
+  auction   Auction  @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+  teamId    String
+  team      Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  playerId  String
+  player    Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  amount    Int
+  createdAt DateTime @default(now())
+
+  @@index([auctionId, playerId])
+  @@index([auctionId, teamId])
+  @@map("bids")
+}
+
+model Sale {
+  id        String   @id @default(uuid())
+  auctionId String
+  auction   Auction  @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+  playerId  String
+  player    Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  teamId    String
+  team      Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  price     Int
+  createdAt DateTime @default(now())
+
+  @@unique([auctionId, playerId])
+  @@index([auctionId])
+  @@map("sales")
+}
+
+model UnsoldPlayer {
+  auctionId String
+  auction   Auction @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+  playerId  String
+  player    Player  @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@id([auctionId, playerId])
+  @@map("unsold_players")
+}
+
+model SkippedTeam {
+  auctionId String
+  auction   Auction @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+  teamId    String
+  team      Team    @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@id([auctionId, teamId])
+  @@map("skipped_teams")
+}

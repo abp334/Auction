@@ -1,55 +1,60 @@
 import { StatusCodes } from "http-status-codes";
 import type { Request, Response } from "express";
-import { User } from "../models/User.js";
-import { Team } from "../models/Team.js";
+import prisma from "../utils/db.js";
 
-// Admin-only: list users with basic info (supports ?search=)
 export async function listUsers(req: Request, res: Response) {
   const { search } = req.query as { search?: string };
-  const filter: any = {};
-  if (search) {
-    filter.$or = [
-      { name: { $regex: search, $options: "i" } },
-      { email: { $regex: search, $options: "i" } },
-    ];
-  }
-  const users = await User.find(filter)
-    .select("_id name email role teamId")
-    .sort({ name: 1 })
-    .lean();
+
+  const where = search
+    ? {
+        OR: [
+          { name: { contains: search, mode: "insensitive" as const } },
+          { email: { contains: search, mode: "insensitive" as const } },
+        ],
+      }
+    : {};
+
+  const users = await prisma.user.findMany({
+    where,
+    select: { id: true, name: true, email: true, role: true, teamId: true },
+    orderBy: { name: "asc" },
+  });
+
   return res.status(StatusCodes.OK).json({ users });
 }
 
-// Admin-only: promote a user to captain and assign to a team.
 export async function promoteUser(req: Request, res: Response) {
   const { id } = req.params;
   const { teamId } = req.body as { teamId?: string };
-  if (!teamId) {
+
+  if (!teamId)
     return res
       .status(StatusCodes.BAD_REQUEST)
       .json({ error: "teamId is required to promote to captain" });
-  }
 
-  const user = await User.findById(id);
+  const [user, team] = await Promise.all([
+    prisma.user.findUnique({ where: { id } }),
+    prisma.team.findUnique({ where: { id: teamId } }),
+  ]);
+
   if (!user)
     return res.status(StatusCodes.NOT_FOUND).json({ error: "User not found" });
-
-  const team = await Team.findById(teamId);
   if (!team)
     return res.status(StatusCodes.NOT_FOUND).json({ error: "Team not found" });
 
-  // Assign captain role and team
-  user.role = "captain";
-  user.teamId = teamId;
-  await user.save();
-
-  // Update team captain fields
-  team.captainId = user.id;
-  team.captain = user.name;
-  await team.save();
+  await prisma.$transaction([
+    prisma.user.update({
+      where: { id },
+      data: { role: "captain", teamId },
+    }),
+    prisma.team.update({
+      where: { id: teamId },
+      data: { captainId: id, captain: user.name },
+    }),
+  ]);
 
   return res.status(StatusCodes.OK).json({
-    user: { id: user.id, name: user.name, role: user.role },
+    user: { id: user.id, name: user.name, role: "captain" },
     team: { id: team.id, name: team.name },
   });
 }
