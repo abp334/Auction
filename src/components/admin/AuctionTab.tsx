@@ -80,6 +80,12 @@ const needsBattingType = (role: string) =>
 const needsBowlingType = (role: string) =>
   ["Bowler", "All-Rounder"].includes(role);
 
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const PHONE_REGEX = /^[+]?[\d][\d\s-]{6,14}$/;
+
+const isValidEmail = (value: string) => EMAIL_REGEX.test(String(value || "").trim());
+const isValidPhone = (value: string) => PHONE_REGEX.test(String(value || "").trim());
+
 const noop = () => undefined;
 
 const AuctionTab = () => {
@@ -188,6 +194,17 @@ const AuctionTab = () => {
             logo: p.logo || "🏆",
             captainEmail: p.email || p["captain email"] || "",
           }));
+          const invalidEmails = mappedTeams.filter(
+            (t) => !isValidEmail(t.captainEmail)
+          );
+          if (invalidEmails.length > 0) {
+            toast({
+              title: "Invalid Captain Email",
+              description: `${invalidEmails.length} team row(s) are missing a valid captain email. Each team needs a valid email to auto-create the captain's login.`,
+              variant: "destructive",
+            });
+            return;
+          }
           setTeamsData((prev) => [...prev, ...mappedTeams]);
         } else {
           const rowsMissingRole = parsed.filter((p) => !String(p.role || "").trim());
@@ -210,6 +227,28 @@ const AuctionTab = () => {
             mobile: p.mobile || "",
             email: p.email || "",
           }));
+          const invalidEmails = mappedPlayers.filter(
+            (p) => !isValidEmail(p.email)
+          );
+          if (invalidEmails.length > 0) {
+            toast({
+              title: "Invalid Player Email",
+              description: `${invalidEmails.length} player row(s) are missing a valid email. Each player needs a valid email to auto-create their login.`,
+              variant: "destructive",
+            });
+            return;
+          }
+          const invalidMobiles = mappedPlayers.filter(
+            (p) => p.mobile && !isValidPhone(p.mobile)
+          );
+          if (invalidMobiles.length > 0) {
+            toast({
+              title: "Invalid Mobile Number",
+              description: `${invalidMobiles.length} player row(s) have an invalid mobile number.`,
+              variant: "destructive",
+            });
+            return;
+          }
           setPlayersData((prev) => [...prev, ...mappedPlayers]);
         }
         toast({
@@ -488,6 +527,23 @@ const AuctionTab = () => {
                         className="w-full bg-amber-500 text-black font-bold"
                         disabled={!teamForm.name || !teamForm.captainEmail}
                         onClick={() => {
+                          if (!teamForm.name.trim()) {
+                            toast({
+                              title: "Team Name Required",
+                              description: "Please enter a team name.",
+                              variant: "destructive",
+                            });
+                            return;
+                          }
+                          if (!isValidEmail(teamForm.captainEmail)) {
+                            toast({
+                              title: "Invalid Captain Email",
+                              description:
+                                "Enter a valid captain email. It is used to auto-create the captain's login.",
+                              variant: "destructive",
+                            });
+                            return;
+                          }
                           setTeamsData([...teamsData, teamForm]);
                           // Reset form
                           setTeamForm({
@@ -639,7 +695,7 @@ const AuctionTab = () => {
                           className="bg-[#0f1419]"
                         />
                         <Input
-                          placeholder="Mobile"
+                          placeholder="Mobile (optional)"
                           value={playerForm.mobile}
                           onChange={(e) =>
                             setPlayerForm({
@@ -650,7 +706,7 @@ const AuctionTab = () => {
                           className="bg-[#0f1419]"
                         />
                         <Input
-                          placeholder="Email"
+                          placeholder="Email (required for login)"
                           type="email"
                           value={playerForm.email}
                           onChange={(e) =>
@@ -742,6 +798,35 @@ const AuctionTab = () => {
                               playerForm.bowlerType === "None"))
                         }
                         onClick={() => {
+                          if (!playerForm.name.trim()) {
+                            toast({
+                              title: "Player Name Required",
+                              description: "Please enter the player's name.",
+                              variant: "destructive",
+                            });
+                            return;
+                          }
+                          if (!isValidEmail(playerForm.email)) {
+                            toast({
+                              title: "Invalid Player Email",
+                              description:
+                                "Enter a valid email. It is used to auto-create the player's login.",
+                              variant: "destructive",
+                            });
+                            return;
+                          }
+                          if (
+                            playerForm.mobile &&
+                            !isValidPhone(playerForm.mobile)
+                          ) {
+                            toast({
+                              title: "Invalid Mobile Number",
+                              description:
+                                "Enter a valid mobile number, or leave it blank.",
+                              variant: "destructive",
+                            });
+                            return;
+                          }
                           setPlayersData([...playersData, playerForm]);
                           setPlayerForm({
                             name: "",

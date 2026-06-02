@@ -18,7 +18,6 @@ const Auth = () => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [isLogin, setIsLogin] = useState(true);
-  const [role, setRole] = useState<"admin" | "player">("player");
   const [passwordError, setPasswordError] = useState("");
 
   // ADDED: State for OTP
@@ -57,12 +56,13 @@ const Auth = () => {
     }
 
     if (!isLogin) {
-      // Sign Up Flow
+      // Sign Up Flow — only auction organizers (admins) self-register.
+      // Captains and players get their logins auto-created by the admin.
       const ok = await signup({
         email,
         password,
         name: email.split("@")[0],
-        role,
+        role: "admin",
       });
 
       if (ok) {
@@ -179,17 +179,10 @@ const Auth = () => {
                 </div>
 
                 {!isLogin && (
-                  <div className="space-y-2">
-                    <Label htmlFor="role">Role</Label>
-                    <select
-                      id="role"
-                      className="w-full bg-white border border-amber-500 text-black rounded-lg px-3 py-2"
-                      value={role}
-                      onChange={(e) => setRole(e.target.value as any)}
-                    >
-                      <option value="player">Player</option>
-                      <option value="admin">Admin</option>
-                    </select>
+                  <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3 text-xs text-amber-300">
+                    Sign up is for auction organizers only. Captains and players
+                    receive their logins automatically when an organizer adds
+                    them to an auction.
                   </div>
                 )}
               </>
