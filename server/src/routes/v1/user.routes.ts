@@ -1,18 +1,24 @@
 import { Router } from "express";
-import { requireAuth, requireRoles } from "../../middleware/auth.js";
-import { listUsers } from "../../controllers/user.controller.js";
+import { requireAuth, requireRoles, requireSuperAdmin } from "../../middleware/auth.js";
+import { listUsers, listAdminUsers, deleteUser } from "../../controllers/user.controller.js";
 
 const router = Router();
 
 // Admin-only user listing (for assigning captains)
 router.get("/", requireAuth, requireRoles(["admin"]), listUsers);
+
+// Super admin: list all admin users
+router.get("/admins", requireAuth, requireSuperAdmin(), listAdminUsers);
+
+// Super admin: delete a user
+router.delete("/:id", requireAuth, requireSuperAdmin(), deleteUser);
+
 // Promote a user to captain and assign to a team (admin only)
 router.post(
   "/:id/promote",
   requireAuth,
   requireRoles(["admin"]),
   async (req, res, next) => {
-    // Lazy import controller to keep things simple
     const { promoteUser } = await import(
       "../../controllers/user.controller.js"
     );

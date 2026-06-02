@@ -23,6 +23,71 @@ export async function listUsers(req: Request, res: Response) {
   return res.status(StatusCodes.OK).json({ users });
 }
 
+export async function listAdminUsers(req: Request, res: Response) {
+  const users = await prisma.user.findMany({
+    where: { role: "admin" },
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      role: true,
+      emailVerified: true,
+      createdAt: true,
+    },
+    orderBy: { createdAt: "desc" },
+  });
+
+  return res.status(StatusCodes.OK).json({ users });
+}
+
+export async function deleteUser(
+  req: Request & { user?: { id: string; role: string } },
+  res: Response
+) {
+  const { id } = req.params;
+
+  if (req.user?.id === id) {
+    return res
+      .status(StatusCodes.BAD_REQUEST)
+      .json({ error: "You cannot delete your own account." });
+  }
+
+  const target = await prisma.user.findUnique({ where: { id } });
+  if (!target) {
+    return res.status(StatusCodes.NOT_FOUND).json({ error: "User not found" });
+  }
+
+  // If the user owns any auctions, delete those first
+  const ownedAuctions = await prisma.auction.findMany({
+    where: { createdById: id },
+    select: { id: true },
+  });
+
+  if (ownedAuctions.length > 0) {
+    const auctionIds = ownedAuctions.map((a) => a.id);
+    await prisma.$transaction(async (tx) => {
+      for (const aId of auctionIds) {
+        await tx.auction.update({
+          where: { id: aId },
+          data: {
+            currentPlayerId: null,
+            currentBidAmount: null,
+            currentBidTeamId: null,
+          },
+        });
+      }
+      await tx.user.deleteMany({
+        where: { auctionId: { in: auctionIds } },
+      });
+      await tx.auction.deleteMany({ where: { id: { in: auctionIds } } });
+    });
+  }
+
+  await prisma.user.delete({ where: { id } });
+
+  return res.status(StatusCodes.OK).json({ message: "User deleted" });
+}
+
 export async function promoteUser(req: Request, res: Response) {
   const { id } = req.params;
   const { teamId } = req.body as { teamId?: string };
