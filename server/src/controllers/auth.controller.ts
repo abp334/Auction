@@ -21,6 +21,10 @@ const signupSchema = Joi.object({
   password: Joi.string().min(8).required(),
   name: Joi.string().min(2).required(),
   role: Joi.string().valid("admin").default("admin"),
+  inviteCode: Joi.string().required().messages({
+    "any.required": "An invite code is required to create an account.",
+    "string.empty": "An invite code is required to create an account.",
+  }),
 });
 
 const verifyOtpSchema = Joi.object({
@@ -101,6 +105,37 @@ export async function signup(req: Request, res: Response) {
   if (error)
     return res.status(StatusCodes.BAD_REQUEST).json({ error: error.message });
 
+  // Validate invite code: either matches the env bypass or a valid DB code
+  const bypassCode = process.env.SIGNUP_BYPASS_CODE;
+  const isBypassed = bypassCode && value.inviteCode === bypassCode;
+
+  if (!isBypassed) {
+    const invite = await prisma.inviteCode.findUnique({
+      where: { code: value.inviteCode },
+    });
+
+    if (!invite) {
+      return res
+        .status(StatusCodes.FORBIDDEN)
+        .json({ error: "Invalid invite code." });
+    }
+    if (invite.used) {
+      return res
+        .status(StatusCodes.FORBIDDEN)
+        .json({ error: "This invite code has already been used." });
+    }
+    if (invite.expiresAt && invite.expiresAt < new Date()) {
+      return res
+        .status(StatusCodes.FORBIDDEN)
+        .json({ error: "This invite code has expired." });
+    }
+    if (invite.email && invite.email.toLowerCase() !== value.email.toLowerCase()) {
+      return res
+        .status(StatusCodes.FORBIDDEN)
+        .json({ error: "This invite code is not valid for your email." });
+    }
+  }
+
   const existing = await prisma.user.findUnique({
     where: { email: value.email },
   });
@@ -137,6 +172,14 @@ export async function signup(req: Request, res: Response) {
         otpHash,
         otpExpires,
       },
+    });
+  }
+
+  // Mark the invite code as used (skip if bypassed)
+  if (!isBypassed) {
+    await prisma.inviteCode.update({
+      where: { code: value.inviteCode },
+      data: { used: true, usedAt: new Date(), usedBy: value.email },
     });
   }
 

@@ -207,3 +207,17 @@ model SkippedTeam {
   @@id([auctionId, teamId])
   @@map("skipped_teams")
 }
+
+model InviteCode {
+  id        String    @id @default(uuid())
+  code      String    @unique
+  email     String?
+  used      Boolean   @default(false)
+  usedAt    DateTime?
+  usedBy    String?
+  expiresAt DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([code])
+  @@map("invite_codes")
+}

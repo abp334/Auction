@@ -20,6 +20,7 @@ const STRONG_PASSWORD_REGEX =
 const Auth = () => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [inviteCode, setInviteCode] = useState("");
   const [isLogin, setIsLogin] = useState(true);
   const [passwordError, setPasswordError] = useState("");
 
@@ -66,13 +67,21 @@ const Auth = () => {
     }
 
     if (!isLogin) {
-      // Sign Up Flow — only auction organizers (admins) self-register.
-      // Captains and players get their logins auto-created by the admin.
+      if (!inviteCode.trim()) {
+        toast({
+          title: "Error",
+          description: "Please enter your invite code.",
+          variant: "destructive",
+        });
+        return;
+      }
+
       const ok = await signup({
         email,
         password,
         name: email.split("@")[0],
         role: "admin",
+        inviteCode: inviteCode.trim(),
       });
 
       if (ok) {
@@ -298,11 +307,23 @@ const Auth = () => {
                 </div>
 
                 {!isLogin && (
-                  <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3 text-xs text-amber-300">
-                    Sign up is for auction organizers only. Captains and players
-                    receive their logins automatically when an organizer adds
-                    them to an auction.
-                  </div>
+                  <>
+                    <div className="space-y-2">
+                      <Label htmlFor="inviteCode">Invite Code</Label>
+                      <Input
+                        id="inviteCode"
+                        type="text"
+                        placeholder="Enter your invite code"
+                        value={inviteCode}
+                        onChange={(e) => setInviteCode(e.target.value.toUpperCase())}
+                        className="tracking-widest font-mono"
+                      />
+                    </div>
+                    <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3 text-xs text-amber-300">
+                      An invite code is required to sign up. Contact us to
+                      purchase access for your cricket auction.
+                    </div>
+                  </>
                 )}
               </>
             ) : (

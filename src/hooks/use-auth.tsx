@@ -22,6 +22,7 @@ type AuthContextValue = {
     password: string;
     name: string;
     role?: "admin" | "player";
+    inviteCode: string;
   }) => Promise<boolean>;
   // ADDED: Verification function
   verifySignupOtp: (email: string, otp: string) => Promise<boolean>;
@@ -90,6 +91,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     password: string;
     name: string;
     role?: "admin" | "player";
+    inviteCode: string;
   }) => {
     const res = await apiFetch("/auth/signup", {
       method: "POST",
