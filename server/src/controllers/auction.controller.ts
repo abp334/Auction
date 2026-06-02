@@ -293,6 +293,14 @@ export async function createAuction(
             });
           }
 
+          // captainId is unique per team — release this user from any team
+          // they previously captained (e.g. in an earlier auction) before
+          // assigning them to the new team.
+          await tx.team.updateMany({
+            where: { captainId: user.id, NOT: { id: newTeam.id } },
+            data: { captainId: null },
+          });
+
           await tx.team.update({
             where: { id: newTeam.id },
             data: { captainId: user.id, captain: user.name },
