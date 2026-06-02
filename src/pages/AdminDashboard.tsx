@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Gavel, LogOut } from "lucide-react";
 import AuctionTab from "@/components/admin/AuctionTab";
+import InviteCodesPanel from "@/components/admin/InviteCodesPanel";
 import { useAuth } from "@/hooks/use-auth";
 import logo from "@/assets/logo.png";
 const AdminDashboard = () => {
@@ -47,8 +48,8 @@ const AdminDashboard = () => {
 
       <main className="container mx-auto px-4 py-8">
         <div className="max-w-5xl mx-auto">
-          {/* Single Unified Tab for the Auction Lifecycle */}
           <AuctionTab />
+          <InviteCodesPanel />
         </div>
       </main>
     </div>
