@@ -22,6 +22,7 @@ import {
   Trash2,
   Image as ImageIcon,
   Download,
+  Pencil,
 } from "lucide-react";
 import {
   AlertDialog,
@@ -105,8 +106,11 @@ const AuctionTab = () => {
   const [isTeamDialogOpen, setIsTeamDialogOpen] = useState(false);
   const [isPlayerDialogOpen, setIsPlayerDialogOpen] = useState(false);
 
-  // Manual Form States
-  const [teamForm, setTeamForm] = useState({
+  // Edit mode: index of the staged item being edited (null = adding new)
+  const [editTeamIndex, setEditTeamIndex] = useState<number | null>(null);
+  const [editPlayerIndex, setEditPlayerIndex] = useState<number | null>(null);
+
+  const emptyTeamForm = {
     name: "",
     wallet: 10000000,
     owner: "",
@@ -114,8 +118,8 @@ const AuctionTab = () => {
     logo: "🏆",
     captain: "",
     captainEmail: "",
-  });
-  const [playerForm, setPlayerForm] = useState({
+  };
+  const emptyPlayerForm = {
     name: "",
     role: "",
     basePrice: 1000,
@@ -125,7 +129,11 @@ const AuctionTab = () => {
     mobile: "",
     email: "",
     photo: "",
-  });
+  };
+
+  // Manual Form States
+  const [teamForm, setTeamForm] = useState({ ...emptyTeamForm });
+  const [playerForm, setPlayerForm] = useState({ ...emptyPlayerForm });
 
   // Check for active auction on load
   useEffect(() => {
@@ -193,6 +201,7 @@ const AuctionTab = () => {
             wallet: Number(p.wallet || 10000000),
             owner: p.owner || "Owner",
             logo: p.logo || "🏆",
+            captain: p.captain || p["captain name"] || "",
             captainEmail: p.email || p["captain email"] || "",
           }));
           const invalidEmails = mappedTeams.filter(
@@ -217,14 +226,20 @@ const AuctionTab = () => {
             });
             return;
           }
+          // Treat "N/A" (used for not-applicable batting/bowling) as empty.
+          const cleanNA = (value: any) => {
+            const s = String(value ?? "").trim();
+            return s.toUpperCase() === "N/A" ? "" : s;
+          };
           const mappedPlayers = parsed.map((p) => ({
             name: p.name || "Unknown Player",
             role: String(p.role).trim(),
             basePrice: Number(p.baseprice || p.price || 1000),
             age: Number(p.age || 25),
             photo: p.photo || "",
-            batsmanType: p.batsmanType || p.battingType || p.batting || "",
-            bowlerType: p.bowlerType || p.bowlingType || p.bowling || "None",
+            batsmanType: cleanNA(p.batsmantype || p.battingtype || p.batting),
+            bowlerType:
+              cleanNA(p.bowlertype || p.bowlingtype || p.bowling) || "None",
             mobile: p.mobile || "",
             email: p.email || "",
           }));
@@ -273,6 +288,7 @@ const AuctionTab = () => {
         ? [
             {
               name: "Chennai Super Kings",
+              captain: "MS Dhoni",
               wallet: 10000000,
               owner: "Owner Name",
               logo: "🦁",
@@ -280,6 +296,7 @@ const AuctionTab = () => {
             },
             {
               name: "Mumbai Indians",
+              captain: "Rohit Sharma",
               wallet: 10000000,
               owner: "Owner Name",
               logo: "🔵",
@@ -293,19 +310,21 @@ const AuctionTab = () => {
               baseprice: 1000,
               age: 25,
               batsmanType: "Right-Hand Batsman",
-              bowlerType: "None",
+              bowlerType: "N/A",
               mobile: "9876543210",
               email: "het.shah@example.com",
+              photo: "https://example.com/het.jpg",
             },
             {
               name: "Ravi Kumar",
               role: "Bowler",
               baseprice: 1500,
               age: 28,
-              batsmanType: "",
+              batsmanType: "N/A",
               bowlerType: "Right Arm Fast",
               mobile: "9876500000",
               email: "ravi.kumar@example.com",
+              photo: "",
             },
             {
               name: "Arjun Mehta",
@@ -316,6 +335,7 @@ const AuctionTab = () => {
               bowlerType: "Left Arm Orthodox",
               mobile: "9870000000",
               email: "arjun.mehta@example.com",
+              photo: "",
             },
           ];
 
@@ -505,20 +525,34 @@ const AuctionTab = () => {
                   </h3>
                   <Dialog
                     open={isTeamDialogOpen}
-                    onOpenChange={setIsTeamDialogOpen}
+                    onOpenChange={(open) => {
+                      setIsTeamDialogOpen(open);
+                      if (!open) {
+                        setEditTeamIndex(null);
+                        setTeamForm({ ...emptyTeamForm });
+                      }
+                    }}
                   >
                     <DialogTrigger asChild>
                       <Button
                         variant="outline"
                         size="sm"
                         className="border-amber-500/50 text-amber-500 hover:bg-amber-500/10"
+                        onClick={() => {
+                          setEditTeamIndex(null);
+                          setTeamForm({ ...emptyTeamForm });
+                        }}
                       >
                         <Plus className="w-4 h-4 mr-1" /> Add Manual
                       </Button>
                     </DialogTrigger>
                     <DialogContent className="bg-[#1a2332] text-white border-white/10 max-w-lg">
                       <DialogHeader>
-                        <DialogTitle>Add Team Manually</DialogTitle>
+                        <DialogTitle>
+                          {editTeamIndex !== null
+                            ? "Edit Team"
+                            : "Add Team Manually"}
+                        </DialogTitle>
                       </DialogHeader>
                       <div className="grid grid-cols-2 gap-4 py-4">
                         <div className="space-y-2">
@@ -613,26 +647,32 @@ const AuctionTab = () => {
                             });
                             return;
                           }
-                          setTeamsData([...teamsData, teamForm]);
-                          // Reset form
-                          setTeamForm({
-                            name: "",
-                            wallet: 10000000,
-                            owner: "",
-                            code: "",
-                            logo: "🏆",
-                            captain: "",
-                            captainEmail: "",
-                          });
+                          if (editTeamIndex !== null) {
+                            setTeamsData(
+                              teamsData.map((t, idx) =>
+                                idx === editTeamIndex ? teamForm : t
+                              )
+                            );
+                            toast({
+                              title: "Team Updated",
+                              description: "Team details saved.",
+                            });
+                          } else {
+                            setTeamsData([...teamsData, teamForm]);
+                            toast({
+                              title: "Team Added",
+                              description:
+                                "Team and Captain staged for creation.",
+                            });
+                          }
+                          setTeamForm({ ...emptyTeamForm });
+                          setEditTeamIndex(null);
                           setIsTeamDialogOpen(false);
-                          toast({
-                            title: "Team Added",
-                            description:
-                              "Team and Captain staged for creation.",
-                          });
                         }}
                       >
-                        Add to Staging List
+                        {editTeamIndex !== null
+                          ? "Save Changes"
+                          : "Add to Staging List"}
                       </Button>
                     </DialogContent>
                   </Dialog>
@@ -683,14 +723,24 @@ const AuctionTab = () => {
                               "No Email (No User will be created)"}
                           </span>
                         </div>
-                        <Trash2
-                          className="w-3 h-3 text-red-500 cursor-pointer"
-                          onClick={() =>
-                            setTeamsData(
-                              teamsData.filter((_, idx) => idx !== i)
-                            )
-                          }
-                        />
+                        <div className="flex items-center gap-2">
+                          <Pencil
+                            className="w-3 h-3 text-amber-400 cursor-pointer"
+                            onClick={() => {
+                              setTeamForm({ ...emptyTeamForm, ...t });
+                              setEditTeamIndex(i);
+                              setIsTeamDialogOpen(true);
+                            }}
+                          />
+                          <Trash2
+                            className="w-3 h-3 text-red-500 cursor-pointer"
+                            onClick={() =>
+                              setTeamsData(
+                                teamsData.filter((_, idx) => idx !== i)
+                              )
+                            }
+                          />
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -706,20 +756,34 @@ const AuctionTab = () => {
                   </h3>
                   <Dialog
                     open={isPlayerDialogOpen}
-                    onOpenChange={setIsPlayerDialogOpen}
+                    onOpenChange={(open) => {
+                      setIsPlayerDialogOpen(open);
+                      if (!open) {
+                        setEditPlayerIndex(null);
+                        setPlayerForm({ ...emptyPlayerForm });
+                      }
+                    }}
                   >
                     <DialogTrigger asChild>
                       <Button
                         variant="outline"
                         size="sm"
                         className="border-amber-500/50 text-amber-500 hover:bg-amber-500/10"
+                        onClick={() => {
+                          setEditPlayerIndex(null);
+                          setPlayerForm({ ...emptyPlayerForm });
+                        }}
                       >
                         <Plus className="w-4 h-4 mr-1" /> Add Manual
                       </Button>
                     </DialogTrigger>
                     <DialogContent className="bg-[#1a2332] text-white border-white/10 max-w-xl">
                       <DialogHeader>
-                        <DialogTitle>Add Player Manually</DialogTitle>
+                        <DialogTitle>
+                          {editPlayerIndex !== null
+                            ? "Edit Player"
+                            : "Add Player Manually"}
+                        </DialogTitle>
                       </DialogHeader>
                       <div className="grid grid-cols-2 gap-4 py-4">
                         <div className="col-span-2 flex items-center gap-4">
@@ -908,22 +972,25 @@ const AuctionTab = () => {
                             });
                             return;
                           }
-                          setPlayersData([...playersData, playerForm]);
-                          setPlayerForm({
-                            name: "",
-                            role: "",
-                            basePrice: 1000,
-                            age: 25,
-                            batsmanType: "Right-Hand Batsman",
-                            bowlerType: "None",
-                            mobile: "",
-                            email: "",
-                            photo: "",
-                          });
+                          if (editPlayerIndex !== null) {
+                            setPlayersData(
+                              playersData.map((p, idx) =>
+                                idx === editPlayerIndex ? playerForm : p
+                              )
+                            );
+                            toast({
+                              title: "Player Updated",
+                              description: "Player details saved.",
+                            });
+                          } else {
+                            setPlayersData([...playersData, playerForm]);
+                          }
+                          setPlayerForm({ ...emptyPlayerForm });
+                          setEditPlayerIndex(null);
                           setIsPlayerDialogOpen(false);
                         }}
                       >
-                        Add to List
+                        {editPlayerIndex !== null ? "Save Changes" : "Add to List"}
                       </Button>
                     </DialogContent>
                   </Dialog>
@@ -970,14 +1037,24 @@ const AuctionTab = () => {
                         <span>
                           {p.name} <span className="text-amber-400">({p.role})</span>
                         </span>
-                        <Trash2
-                          className="w-3 h-3 text-red-500 cursor-pointer"
-                          onClick={() =>
-                            setPlayersData(
-                              playersData.filter((_, idx) => idx !== i)
-                            )
-                          }
-                        />
+                        <div className="flex items-center gap-2">
+                          <Pencil
+                            className="w-3 h-3 text-amber-400 cursor-pointer"
+                            onClick={() => {
+                              setPlayerForm({ ...emptyPlayerForm, ...p });
+                              setEditPlayerIndex(i);
+                              setIsPlayerDialogOpen(true);
+                            }}
+                          />
+                          <Trash2
+                            className="w-3 h-3 text-red-500 cursor-pointer"
+                            onClick={() =>
+                              setPlayersData(
+                                playersData.filter((_, idx) => idx !== i)
+                              )
+                            }
+                          />
+                        </div>
                       </div>
                     ))}
                   </div>

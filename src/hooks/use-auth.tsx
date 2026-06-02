@@ -9,9 +9,14 @@ type User = {
   teamId?: string;
 };
 
+type LoginResult = {
+  ok: boolean;
+  mustChangePassword?: boolean;
+};
+
 type AuthContextValue = {
   user: User | null;
-  login: (email: string, password: string) => Promise<boolean>;
+  login: (email: string, password: string) => Promise<LoginResult>;
   signup: (payload: {
     email: string;
     password: string;
@@ -20,6 +25,12 @@ type AuthContextValue = {
   }) => Promise<boolean>;
   // ADDED: Verification function
   verifySignupOtp: (email: string, otp: string) => Promise<boolean>;
+  // Forced secure password change for auto-provisioned accounts
+  completePasswordReset: (
+    email: string,
+    otp: string,
+    newPassword: string
+  ) => Promise<{ ok: boolean; error?: string }>;
   logout: () => Promise<void>;
 };
 
@@ -28,17 +39,50 @@ const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
 
-  const login = async (email: string, password: string) => {
+  const login = async (
+    email: string,
+    password: string
+  ): Promise<LoginResult> => {
     const res = await apiFetch("/auth/login", {
       method: "POST",
       body: JSON.stringify({ email, password }),
       credentials: "include",
     });
-    if (!res.ok) return false;
+    if (!res.ok) return { ok: false };
+    const data = await res.json();
+    // Temporary auto-provisioned accounts must set a new password first.
+    if (data.mustChangePassword) {
+      return { ok: false, mustChangePassword: true };
+    }
+    setAccessToken(data.accessToken);
+    setUser(data.user);
+    return { ok: true };
+  };
+
+  const completePasswordReset = async (
+    email: string,
+    otp: string,
+    newPassword: string
+  ) => {
+    const res = await apiFetch("/auth/complete-password-reset", {
+      method: "POST",
+      body: JSON.stringify({ email, otp, newPassword }),
+      credentials: "include",
+    });
+    if (!res.ok) {
+      let error = "Failed to update password.";
+      try {
+        const data = await res.json();
+        error = data.error || error;
+      } catch {
+        // ignore parse errors
+      }
+      return { ok: false, error };
+    }
     const data = await res.json();
     setAccessToken(data.accessToken);
     setUser(data.user);
-    return true;
+    return { ok: true };
   };
 
   const signup = async (payload: {
@@ -102,7 +146,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const value = useMemo(
-    () => ({ user, login, signup, verifySignupOtp, logout }),
+    () => ({
+      user,
+      login,
+      signup,
+      verifySignupOtp,
+      completePasswordReset,
+      logout,
+    }),
     [user]
   );
 

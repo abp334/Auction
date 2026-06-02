@@ -33,6 +33,19 @@ const loginSchema = Joi.object({
   password: Joi.string().required(),
 });
 
+// Strong password: >8 chars, at least one lowercase, uppercase, digit & special char.
+const STRONG_PASSWORD_REGEX =
+  /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{9,}$/;
+
+const completePasswordResetSchema = Joi.object({
+  email: Joi.string().email().required(),
+  otp: Joi.string().length(6).required(),
+  newPassword: Joi.string().pattern(STRONG_PASSWORD_REGEX).required().messages({
+    "string.pattern.base":
+      "Password must be longer than 8 characters and include an uppercase letter, a lowercase letter, a number, and a special character.",
+  }),
+});
+
 async function sendOtpEmail(email: string, otp: string): Promise<boolean> {
   const message = `Your verification code is ${otp}. It will expire in 10 minutes.`;
   const serviceId = process.env.EMAILJS_SERVICE_ID;
@@ -209,6 +222,26 @@ export async function login(req: Request, res: Response) {
       .status(StatusCodes.UNAUTHORIZED)
       .json({ error: "Invalid credentials" });
 
+  // Auto-provisioned captain/player accounts use a predictable temporary
+  // password. Force a secure password change (verified by email OTP) before
+  // issuing any session tokens.
+  if (user.mustChangePassword) {
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const otpHash = await bcrypt.hash(otp, 10);
+    const otpExpires = new Date(Date.now() + 10 * 60 * 1000);
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { otpHash, otpExpires },
+    });
+    await sendOtpEmail(user.email, otp);
+    return res.status(StatusCodes.OK).json({
+      mustChangePassword: true,
+      email: user.email,
+      message:
+        "For security, set a new password. A verification code has been sent to your email.",
+    });
+  }
+
   const at = signAccessToken({ sub: user.id, role: user.role });
   const rt = signRefreshToken({ sub: user.id });
   const rtHash = await hashRefreshToken(rt);
@@ -216,6 +249,57 @@ export async function login(req: Request, res: Response) {
   await prisma.user.update({
     where: { id: user.id },
     data: { refreshTokenHash: rtHash },
+  });
+
+  setRefreshCookie(res, rt);
+
+  return res.status(StatusCodes.OK).json({
+    accessToken: at,
+    user: {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      role: user.role,
+      teamId: user.teamId,
+    },
+  });
+}
+
+export async function completePasswordReset(req: Request, res: Response) {
+  const { error, value } = completePasswordResetSchema.validate(req.body);
+  if (error)
+    return res.status(StatusCodes.BAD_REQUEST).json({ error: error.message });
+
+  const user = await prisma.user.findUnique({ where: { email: value.email } });
+  if (!user)
+    return res.status(StatusCodes.NOT_FOUND).json({ error: "User not found" });
+
+  if (!user.otpHash || !user.otpExpires || user.otpExpires < new Date())
+    return res
+      .status(StatusCodes.BAD_REQUEST)
+      .json({ error: "Verification code expired. Please sign in again." });
+
+  const validOtp = await bcrypt.compare(value.otp, user.otpHash);
+  if (!validOtp)
+    return res
+      .status(StatusCodes.BAD_REQUEST)
+      .json({ error: "Invalid verification code" });
+
+  const passwordHash = await hashPassword(value.newPassword);
+  const at = signAccessToken({ sub: user.id, role: user.role });
+  const rt = signRefreshToken({ sub: user.id });
+  const rtHash = await hashRefreshToken(rt);
+
+  await prisma.user.update({
+    where: { id: user.id },
+    data: {
+      passwordHash,
+      mustChangePassword: false,
+      emailVerified: true,
+      otpHash: null,
+      otpExpires: null,
+      refreshTokenHash: rtHash,
+    },
   });
 
   setRefreshCookie(res, rt);

@@ -280,6 +280,7 @@ export async function createAuction(
                 teamId: newTeam.id,
                 auctionId: auction.id,
                 emailVerified: true,
+                mustChangePassword: true,
               },
             });
           } else {
@@ -337,6 +338,7 @@ export async function createAuction(
               role: "player",
               auctionId: auction.id,
               emailVerified: true,
+              mustChangePassword: true,
             },
           });
           linkedPlayers++;
@@ -789,19 +791,43 @@ export async function closeAuction(req: Request, res: Response) {
       BasePrice: p.basePrice,
     }));
 
-  await prisma.auction.update({
-    where: { id },
-    data: {
-      state: "completed",
-      currentPlayerId: null,
-      currentBidAmount: null,
-      currentBidTeamId: null,
-    },
-  });
-
+  // Notify the room before wiping so connected clients exit cleanly.
   getIO().to(auction.roomCode).emit("auction:ended", {
     message: "Auction completed.",
     auctionId: auction.id,
+  });
+
+  // Fully wipe this auction's data: its teams, its players, and the
+  // auto-provisioned captain/player logins scoped to this auction. After
+  // this, those users can no longer sign in.
+  const teamIds = auction.teams.map((at) => at.teamId);
+  const playerIds = auction.players.map((ap) => ap.playerId);
+
+  await prisma.$transaction(async (tx) => {
+    // Detach references on the auction first to avoid FK conflicts.
+    await tx.auction.update({
+      where: { id },
+      data: {
+        state: "completed",
+        currentPlayerId: null,
+        currentBidAmount: null,
+        currentBidTeamId: null,
+      },
+    });
+
+    // Remove the auto-created captain/player accounts for this auction.
+    await tx.user.deleteMany({ where: { auctionId: id } });
+
+    // Remove players and teams (cascades clear bids, sales, join rows, etc.).
+    if (playerIds.length > 0) {
+      await tx.player.deleteMany({ where: { id: { in: playerIds } } });
+    }
+    if (teamIds.length > 0) {
+      await tx.team.deleteMany({ where: { id: { in: teamIds } } });
+    }
+
+    // Finally remove the auction itself.
+    await tx.auction.delete({ where: { id } });
   });
 
   return res.status(StatusCodes.OK).json({

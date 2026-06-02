@@ -31,6 +31,7 @@ model User {
   auction          Auction?  @relation("AuctionParticipants", fields: [auctionId], references: [id], onDelete: SetNull)
   refreshTokenHash String?
   emailVerified    Boolean   @default(false)
+  mustChangePassword Boolean @default(false)
   otpHash          String?
   otpExpires       DateTime?
   createdAt        DateTime  @default(now())

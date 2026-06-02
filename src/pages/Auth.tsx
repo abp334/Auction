@@ -14,6 +14,9 @@ import { useToast } from "@/hooks/use-toast";
 import { Gavel } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 
+const STRONG_PASSWORD_REGEX =
+  /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{9,}$/;
+
 const Auth = () => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -24,9 +27,16 @@ const Auth = () => {
   const [showOtp, setShowOtp] = useState(false);
   const [otp, setOtp] = useState("");
 
+  // Forced secure password change (first login of auto-provisioned accounts)
+  const [showPasswordChange, setShowPasswordChange] = useState(false);
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [newPwdError, setNewPwdError] = useState("");
+
   const navigate = useNavigate();
   const { toast } = useToast();
-  const { user, login, signup, verifySignupOtp } = useAuth();
+  const { user, login, signup, verifySignupOtp, completePasswordReset } =
+    useAuth();
 
   // Redirect if already logged in
   useEffect(() => {
@@ -82,8 +92,21 @@ const Auth = () => {
     }
 
     // Login Flow
-    const ok = await login(email, password);
-    if (!ok) {
+    const result = await login(email, password);
+    if (result.mustChangePassword) {
+      // Auto-provisioned account using a temporary password — force a change.
+      setOtp("");
+      setNewPassword("");
+      setConfirmPassword("");
+      setShowPasswordChange(true);
+      toast({
+        title: "Set a New Password",
+        description:
+          "For security, a verification code was sent to your email. Set a new password to continue.",
+      });
+      return;
+    }
+    if (!result.ok) {
       toast({
         title: "Error",
         description: "Invalid credentials or email not verified.",
@@ -91,6 +114,44 @@ const Auth = () => {
       });
     } else {
       toast({ title: "Success", description: "Welcome back!" });
+    }
+  };
+
+  const handleCompletePasswordReset = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setNewPwdError("");
+
+    if (!otp || otp.length !== 6) {
+      toast({
+        title: "Error",
+        description: "Please enter the valid 6-digit code sent to your email.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (!STRONG_PASSWORD_REGEX.test(newPassword)) {
+      setNewPwdError(
+        "Password must be longer than 8 characters and include an uppercase letter, a lowercase letter, a number, and a special character."
+      );
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setNewPwdError("Passwords do not match.");
+      return;
+    }
+
+    const res = await completePasswordReset(email, otp, newPassword);
+    if (res.ok) {
+      toast({
+        title: "Password Updated",
+        description: "Your new password is set. Welcome!",
+      });
+    } else {
+      toast({
+        title: "Error",
+        description: res.error || "Could not update password.",
+        variant: "destructive",
+      });
     }
   };
 
@@ -136,7 +197,9 @@ const Auth = () => {
           </div>
           <CardTitle className="text-3xl mb-2">Elite Sports Auction</CardTitle>
           <CardDescription className="text-base">
-            {showOtp
+            {showPasswordChange
+              ? "Secure your account"
+              : showOtp
               ? "Verify your email"
               : isLogin
               ? "Sign in to your account"
@@ -145,10 +208,66 @@ const Auth = () => {
         </CardHeader>
         <CardContent>
           <form
-            onSubmit={showOtp ? handleVerifyOtp : handleAuth}
+            onSubmit={
+              showPasswordChange
+                ? handleCompletePasswordReset
+                : showOtp
+                ? handleVerifyOtp
+                : handleAuth
+            }
             className="space-y-4"
           >
-            {!showOtp ? (
+            {showPasswordChange ? (
+              // FORCED PASSWORD CHANGE FORM (OTP + new strong password)
+              <div className="space-y-4">
+                <div className="bg-amber-500/10 p-4 rounded text-sm text-amber-500 text-center">
+                  A verification code was sent to <strong>{email}</strong>.
+                  <br />
+                  Enter it and choose a new password.
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="reset-otp">Verification Code</Label>
+                  <Input
+                    id="reset-otp"
+                    type="text"
+                    placeholder="123456"
+                    value={otp}
+                    onChange={(e) => setOtp(e.target.value)}
+                    className="text-center text-2xl tracking-widest"
+                    maxLength={6}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="new-password">New Password</Label>
+                  <Input
+                    id="new-password"
+                    type="password"
+                    placeholder="New strong password"
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    className={newPwdError ? "border-red-500" : ""}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="confirm-password">Confirm Password</Label>
+                  <Input
+                    id="confirm-password"
+                    type="password"
+                    placeholder="Re-enter new password"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    className={newPwdError ? "border-red-500" : ""}
+                  />
+                  {newPwdError && (
+                    <span className="text-red-500 text-xs">{newPwdError}</span>
+                  )}
+                </div>
+                <div className="text-xs text-gray-400">
+                  Must be longer than 8 characters with an uppercase, lowercase,
+                  number, and special character.
+                </div>
+              </div>
+            ) : !showOtp ? (
               // NORMAL LOGIN/SIGNUP FORM
               <>
                 <div className="space-y-2">
@@ -214,11 +333,17 @@ const Auth = () => {
               className="w-full bg-amber-500 hover:bg-amber-600 text-primary font-bold"
               size="lg"
             >
-              {showOtp ? "Verify & Login" : isLogin ? "Sign In" : "Sign Up"}
+              {showPasswordChange
+                ? "Update Password & Login"
+                : showOtp
+                ? "Verify & Login"
+                : isLogin
+                ? "Sign In"
+                : "Sign Up"}
             </Button>
           </form>
 
-          {!showOtp && (
+          {!showOtp && !showPasswordChange && (
             <div className="mt-4 text-center">
               <button
                 type="button"
@@ -240,6 +365,21 @@ const Auth = () => {
                 className="text-sm text-muted-foreground hover:text-foreground"
               >
                 Back to Signup
+              </button>
+            </div>
+          )}
+
+          {showPasswordChange && (
+            <div className="mt-4 text-center">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowPasswordChange(false);
+                  setPassword("");
+                }}
+                className="text-sm text-muted-foreground hover:text-foreground"
+              >
+                Back to Sign In
               </button>
             </div>
           )}
