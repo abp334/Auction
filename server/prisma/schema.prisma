@@ -29,11 +29,12 @@ model User {
   team             Team?     @relation("TeamMembers", fields: [teamId], references: [id], onDelete: SetNull)
   auctionId        String?
   auction          Auction?  @relation("AuctionParticipants", fields: [auctionId], references: [id], onDelete: SetNull)
-  refreshTokenHash String?
-  emailVerified    Boolean   @default(false)
-  mustChangePassword Boolean @default(false)
-  otpHash          String?
-  otpExpires       DateTime?
+  refreshTokenHash   String?
+  emailVerified      Boolean   @default(false)
+  mustChangePassword Boolean   @default(false)
+  pendingInviteCode  String?
+  otpHash            String?
+  otpExpires         DateTime?
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 

@@ -150,6 +150,8 @@ export async function signup(req: Request, res: Response) {
   const otpHash = await bcrypt.hash(otp, 10);
   const otpExpires = new Date(Date.now() + 10 * 60 * 1000);
 
+  const pendingInviteCode = isBypassed ? null : value.inviteCode;
+
   if (!existing) {
     await prisma.user.create({
       data: {
@@ -158,6 +160,7 @@ export async function signup(req: Request, res: Response) {
         name: value.name,
         role: value.role || "admin",
         emailVerified: false,
+        pendingInviteCode,
         otpHash,
         otpExpires,
       },
@@ -169,17 +172,10 @@ export async function signup(req: Request, res: Response) {
         passwordHash,
         name: value.name,
         role: value.role || "admin",
+        pendingInviteCode,
         otpHash,
         otpExpires,
       },
-    });
-  }
-
-  // Mark the invite code as used (skip if bypassed)
-  if (!isBypassed) {
-    await prisma.inviteCode.update({
-      where: { code: value.inviteCode },
-      data: { used: true, usedAt: new Date(), usedBy: value.email },
     });
   }
 
@@ -217,10 +213,19 @@ export async function verifyOtp(req: Request, res: Response) {
   const rt = signRefreshToken({ sub: user.id });
   const rtHash = await hashRefreshToken(rt);
 
+  // Mark the invite code as used now that email is verified
+  if (user.pendingInviteCode) {
+    await prisma.inviteCode.update({
+      where: { code: user.pendingInviteCode },
+      data: { used: true, usedAt: new Date(), usedBy: user.email },
+    });
+  }
+
   await prisma.user.update({
     where: { id: user.id },
     data: {
       emailVerified: true,
+      pendingInviteCode: null,
       otpHash: null,
       otpExpires: null,
       refreshTokenHash: rtHash,
