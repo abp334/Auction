@@ -21,6 +21,7 @@ import {
   Plus,
   Trash2,
   Image as ImageIcon,
+  Download,
 } from "lucide-react";
 import {
   AlertDialog,
@@ -264,6 +265,74 @@ const AuctionTab = () => {
       }
     };
     reader.readAsText(file);
+  };
+
+  const downloadSampleCSV = (type: "teams" | "players") => {
+    const sample =
+      type === "teams"
+        ? [
+            {
+              name: "Chennai Super Kings",
+              wallet: 10000000,
+              owner: "Owner Name",
+              logo: "🦁",
+              email: "captain.csk@example.com",
+            },
+            {
+              name: "Mumbai Indians",
+              wallet: 10000000,
+              owner: "Owner Name",
+              logo: "🔵",
+              email: "captain.mi@example.com",
+            },
+          ]
+        : [
+            {
+              name: "Het Shah",
+              role: "Batsman",
+              baseprice: 1000,
+              age: 25,
+              batsmanType: "Right-Hand Batsman",
+              bowlerType: "None",
+              mobile: "9876543210",
+              email: "het.shah@example.com",
+            },
+            {
+              name: "Ravi Kumar",
+              role: "Bowler",
+              baseprice: 1500,
+              age: 28,
+              batsmanType: "",
+              bowlerType: "Right Arm Fast",
+              mobile: "9876500000",
+              email: "ravi.kumar@example.com",
+            },
+            {
+              name: "Arjun Mehta",
+              role: "All-Rounder",
+              baseprice: 2000,
+              age: 26,
+              batsmanType: "Left-Hand Batsman",
+              bowlerType: "Left Arm Orthodox",
+              mobile: "9870000000",
+              email: "arjun.mehta@example.com",
+            },
+          ];
+
+    const csvContent = jsonToCSV(sample);
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `sample_${type}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast({
+      title: "Sample Downloaded",
+      description: `Edit sample_${type}.csv and upload it in the "Upload ${
+        type === "teams" ? "Teams" : "Players"
+      } CSV" box.`,
+    });
   };
 
   const createAndStartAuction = async () => {
@@ -589,6 +658,18 @@ const AuctionTab = () => {
                   >
                     Or Upload Teams CSV
                   </Label>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      downloadSampleCSV("teams");
+                    }}
+                    className="text-amber-400 hover:text-amber-300 hover:bg-amber-500/10 text-xs mb-2"
+                  >
+                    <Download className="w-3 h-3 mr-1" /> Download Sample CSV
+                  </Button>
                   <div className="max-h-40 overflow-y-auto space-y-1">
                     {teamsData.map((t, i) => (
                       <div
@@ -868,6 +949,18 @@ const AuctionTab = () => {
                   >
                     Or Upload Players CSV
                   </Label>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      downloadSampleCSV("players");
+                    }}
+                    className="text-amber-400 hover:text-amber-300 hover:bg-amber-500/10 text-xs mb-2"
+                  >
+                    <Download className="w-3 h-3 mr-1" /> Download Sample CSV
+                  </Button>
                   <div className="max-h-40 overflow-y-auto space-y-1">
                     {playersData.map((p, i) => (
                       <div

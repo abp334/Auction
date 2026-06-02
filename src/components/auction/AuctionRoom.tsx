@@ -84,107 +84,110 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
   const auctionEndTimeRef = useRef<number | null>(null);
   const socketRef = useRef<Socket | null>(null);
 
-  // Helper: Fetch My Players (if captain)
+  // Helper: Resolve the auction id for this room (scopes all data to one auction)
+  const resolveAuctionId = useCallback(async (): Promise<string | null> => {
+    if (auctionId) return auctionId;
+    const res = await apiFetch(
+      `/auctions?roomCode=${encodeURIComponent(roomCode)}`
+    );
+    if (res.ok) {
+      const { auctions } = await res.json();
+      return auctions[0]?.id || null;
+    }
+    return null;
+  }, [auctionId, roomCode]);
+
+  // Helper: Fetch My Players (if captain) — scoped to THIS auction only
   const loadMyPlayers = useCallback(async () => {
     if (role === "captain" && user?.teamId) {
       try {
-        let salePrices = new Map<string, number>();
-        let activeAuctionId = auctionId;
+        const activeAuctionId = await resolveAuctionId();
+        if (!activeAuctionId) return;
 
-        if (!activeAuctionId) {
-          const auctionRes = await apiFetch(
-            `/auctions?roomCode=${encodeURIComponent(roomCode)}`
-          );
-          if (auctionRes.ok) {
-            const { auctions } = await auctionRes.json();
-            activeAuctionId = auctions[0]?.id || null;
-          }
-        }
+        const auctionRes = await apiFetch(`/auctions/${activeAuctionId}`);
+        if (!auctionRes.ok) return;
+        const { auction } = await auctionRes.json();
 
-        if (activeAuctionId) {
-          const auctionRes = await apiFetch(`/auctions/${activeAuctionId}`);
-          if (auctionRes.ok) {
-            const { auction } = await auctionRes.json();
-            salePrices = new Map(
-              (auction.sales || []).map((sale: any) => [
-                String(sale.playerId),
-                sale.price || 0,
-              ])
-            );
-          }
-        }
+        const salePrices = new Map<string, number>(
+          (auction.sales || []).map((sale: any) => [
+            String(sale.playerId),
+            sale.price || 0,
+          ])
+        );
 
-        const pRes = await apiFetch(`/players?teamId=${user.teamId}`);
-        if (pRes.ok) {
-          const { players } = await pRes.json();
-          setMyTeamPlayers(
-            players.map((p: any) => ({
-              id: p.id,
-              name: p.name,
-              photo: p.photo || "",
-              basePrice: p.basePrice || 0,
-              currentBid: salePrices.get(String(p.id)) || p.basePrice || 0,
-              age: p.age || 25,
-              batsmanType: p.role || "",
-              bowlerType: p.bowlerType || "Not a Bowler",
-            }))
-          );
-        }
+        const myPlayers = (auction.players || [])
+          .map((ap: any) => ap.player)
+          .filter((p: any) => p && p.teamId === user.teamId);
+
+        setMyTeamPlayers(
+          myPlayers.map((p: any) => ({
+            id: p.id,
+            name: p.name,
+            photo: p.photo || "",
+            basePrice: p.basePrice || 0,
+            currentBid: salePrices.get(String(p.id)) || p.basePrice || 0,
+            age: p.age || 25,
+            batsmanType: p.role || "",
+            bowlerType: p.bowlerType || "Not a Bowler",
+          }))
+        );
       } catch (err) {
         console.error("Error loading my players", err);
       }
     }
-  }, [auctionId, role, roomCode, user]);
+  }, [resolveAuctionId, role, user]);
 
-  // Helper: Fetch Teams & Validate My Team
+  // Helper: Fetch Teams & Validate My Team — scoped to THIS auction only
   const loadTeams = useCallback(async () => {
     try {
-      const tRes = await apiFetch("/teams");
-      if (tRes.ok) {
-        const { teams } = await tRes.json();
-        const playerCounts = new Map<string, number>();
-        const pRes = await apiFetch("/players");
-        if (pRes.ok) {
-          const { players } = await pRes.json();
-          players.forEach((p: any) => {
-            const tid = p.teamId;
-            if (tid && tid !== "UNSOLD") {
-              playerCounts.set(tid, (playerCounts.get(tid) || 0) + 1);
-            }
-          });
-        }
-        const mappedTeams = teams.map((t: any) => {
-          const tid = t.id;
-          return {
-            id: tid,
-            name: t.name,
-            logo: t.logo || "Team",
-            captain: t.captain || "",
-            purse: t.wallet || 0,
-            players: playerCounts.get(tid) || 0,
-          };
-        });
-        setTeams(mappedTeams);
-        teamsRef.current = mappedTeams;
+      const activeAuctionId = await resolveAuctionId();
+      if (!activeAuctionId) return;
 
-        if (role === "captain" && user?.teamId) {
-          const myTeam = mappedTeams.find((t: any) => t.id === user.teamId);
-          if (myTeam) {
-            setMyTeamId(myTeam.id);
-            setIsTeamValid(true);
-          } else {
-            console.warn(
-              "My Team ID not found in current auction teams. Stale session?"
-            );
-            setMyTeamId(user.teamId); // Keep it but mark invalid
-            setIsTeamValid(false);
-          }
+      const res = await apiFetch(`/auctions/${activeAuctionId}`);
+      if (!res.ok) return;
+      const { auction } = await res.json();
+
+      const auctionPlayers = (auction.players || []).map((ap: any) => ap.player);
+      const playerCounts = new Map<string, number>();
+      auctionPlayers.forEach((p: any) => {
+        const tid = p?.teamId;
+        if (tid && tid !== "UNSOLD") {
+          playerCounts.set(tid, (playerCounts.get(tid) || 0) + 1);
+        }
+      });
+
+      const mappedTeams = (auction.teams || [])
+        .map((at: any) => at.team)
+        .filter(Boolean)
+        .map((t: any) => ({
+          id: t.id,
+          name: t.name,
+          logo: t.logo || "Team",
+          captain: t.captain || "",
+          purse: t.wallet || 0,
+          players: playerCounts.get(t.id) || 0,
+        }));
+
+      setTeams(mappedTeams);
+      teamsRef.current = mappedTeams;
+
+      if (role === "captain" && user?.teamId) {
+        const myTeam = mappedTeams.find((t: any) => t.id === user.teamId);
+        if (myTeam) {
+          setMyTeamId(myTeam.id);
+          setIsTeamValid(true);
+        } else {
+          console.warn(
+            "My Team ID not found in current auction teams. Stale session?"
+          );
+          setMyTeamId(user.teamId); // Keep it but mark invalid
+          setIsTeamValid(false);
         }
       }
     } catch (e) {
       console.error("Error loading teams", e);
     }
-  }, [role, user]);
+  }, [resolveAuctionId, role, user]);
 
   // Helper: Sync Auction State (Clock & Bids)
   const fetchLatestAuctionState = useCallback(async () => {
