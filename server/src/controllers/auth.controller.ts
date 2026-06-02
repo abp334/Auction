@@ -14,11 +14,13 @@ import {
 } from "../utils/auth.js";
 import { logger } from "../utils/logger.js";
 
+// Self-signup is restricted to auction organizers (admins).
+// Captain and player accounts are auto-provisioned during auction creation.
 const signupSchema = Joi.object({
   email: Joi.string().email().required(),
   password: Joi.string().min(8).required(),
   name: Joi.string().min(2).required(),
-  role: Joi.string().valid("admin", "player").default("player"),
+  role: Joi.string().valid("admin").default("admin"),
 });
 
 const verifyOtpSchema = Joi.object({
@@ -106,7 +108,7 @@ export async function signup(req: Request, res: Response) {
         email: value.email,
         passwordHash,
         name: value.name,
-        role: value.role || "player",
+        role: value.role || "admin",
         emailVerified: false,
         otpHash,
         otpExpires,
@@ -118,7 +120,7 @@ export async function signup(req: Request, res: Response) {
       data: {
         passwordHash,
         name: value.name,
-        role: value.role || "player",
+        role: value.role || "admin",
         otpHash,
         otpExpires,
       },

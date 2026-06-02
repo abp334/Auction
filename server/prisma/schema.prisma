@@ -27,6 +27,8 @@ model User {
   role             UserRole  @default(player)
   teamId           String?
   team             Team?     @relation("TeamMembers", fields: [teamId], references: [id], onDelete: SetNull)
+  auctionId        String?
+  auction          Auction?  @relation("AuctionParticipants", fields: [auctionId], references: [id], onDelete: SetNull)
   refreshTokenHash String?
   emailVerified    Boolean   @default(false)
   otpHash          String?
@@ -39,6 +41,7 @@ model User {
 
   @@index([email])
   @@index([teamId])
+  @@index([auctionId])
   @@map("users")
 }
 
@@ -123,6 +126,7 @@ model Auction {
   sales          Sale[]
   unsoldPlayers  UnsoldPlayer[]
   skippedTeams   SkippedTeam[]
+  participants   User[]          @relation("AuctionParticipants")
 
   @@index([roomCode])
   @@index([state])

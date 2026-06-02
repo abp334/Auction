@@ -14,11 +14,39 @@ export function registerAuctionSocketHandlers(
   io: Server,
   socket: Socket
 ): void {
-  socket.on("auction:join", (roomCode: string) => {
-    socket.join(roomCode);
+  socket.on("auction:join", async (roomCode: string) => {
     const socketUser = (socket.data as any)?.user as
       | { id: string; role: string }
       | undefined;
+
+    // Captains and players may only join the auction they were added to.
+    if (
+      socketUser &&
+      (socketUser.role === "captain" || socketUser.role === "player")
+    ) {
+      try {
+        const [dbUser, auction] = await Promise.all([
+          prisma.user.findUnique({
+            where: { id: socketUser.id },
+            select: { auctionId: true },
+          }),
+          prisma.auction.findUnique({
+            where: { roomCode },
+            select: { id: true },
+          }),
+        ]);
+        if (!auction || !dbUser?.auctionId || dbUser.auctionId !== auction.id) {
+          socket.emit("error", {
+            message: "You are not part of this auction.",
+          });
+          return;
+        }
+      } catch {
+        return;
+      }
+    }
+
+    socket.join(roomCode);
     const teamId = (socket.data as any)?.teamId;
     io.to(roomCode).emit("auction:presence", {
       userId: socket.id,
