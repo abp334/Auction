@@ -7,6 +7,7 @@ import {
   placeBid,
   startAuction,
   getAuction,
+  getAuctionReport,
   pauseAuction,
   resumeAuction,
   setCurrentPlayer,
@@ -47,6 +48,7 @@ router.post(
 router.post("/:id/sell-current", requireAuth, sellCurrent);
 // Allow captains to skip current player
 router.post("/:id/skip", requireAuth, requireRoles(["captain"]), skipPlayer);
+router.get("/:id/report", requireAuth, requireRoles(["admin"]), getAuctionReport);
 router.post("/:id/close", requireAuth, requireRoles(["admin"]), closeAuction);
 
 export default router;

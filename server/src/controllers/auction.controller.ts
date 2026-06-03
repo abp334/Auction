@@ -737,6 +737,94 @@ export async function undoBid(req: Request, res: Response) {
   });
 }
 
+export async function getAuctionReport(req: Request, res: Response) {
+  const { id } = req.params;
+  const auction = await prisma.auction.findUnique({
+    where: { id },
+    include: {
+      teams: { include: { team: true } },
+      players: { include: { player: true } },
+      sales: { include: { player: true, team: true } },
+      bids: { include: { player: true, team: true } },
+    },
+  });
+
+  if (!auction)
+    return res
+      .status(StatusCodes.NOT_FOUND)
+      .json({ error: "Auction not found" });
+
+  const teams = auction.teams.map((at) => {
+    const teamPlayers = auction.players
+      .map((ap) => ap.player)
+      .filter((p) => p.teamId === at.teamId);
+    const teamSales = auction.sales.filter((s) => s.teamId === at.teamId);
+    const spent = teamSales.reduce((sum, s) => sum + s.price, 0);
+
+    return {
+      TeamName: at.team.name,
+      Captain: at.team.captain || "None",
+      PlayersCount: teamPlayers.length,
+      TotalSpent: spent,
+      RemainingPurse: at.team.wallet,
+      InitialPurse: at.team.wallet + spent,
+      Roster: teamPlayers.map((p) => {
+        const sale = teamSales.find((s) => s.playerId === p.id);
+        return {
+          Name: p.name,
+          Role: p.role,
+          BatsmanType: p.batsmanType,
+          BowlerType: p.bowlerType,
+          BasePrice: p.basePrice,
+          SoldPrice: sale?.price || 0,
+        };
+      }),
+    };
+  });
+
+  const unsold = auction.players
+    .map((ap) => ap.player)
+    .filter((p) => !p.teamId)
+    .map((p) => ({
+      Name: p.name,
+      Role: p.role,
+      BasePrice: p.basePrice,
+    }));
+
+  const totalBids = auction.bids.length;
+  const totalSold = auction.sales.length;
+  const totalUnsold = unsold.length;
+  const totalPlayers = auction.players.length;
+  const totalSpent = auction.sales.reduce((sum, s) => sum + s.price, 0);
+  const highestSale = auction.sales.length > 0
+    ? auction.sales.reduce((max, s) => (s.price > max.price ? s : max))
+    : null;
+
+  return res.status(StatusCodes.OK).json({
+    report: {
+      auctionName: auction.name,
+      date: auction.createdAt,
+      state: auction.state,
+      summary: {
+        totalPlayers,
+        totalSold,
+        totalUnsold,
+        totalBids,
+        totalSpent,
+        highestSale: highestSale
+          ? {
+              playerName: highestSale.player.name,
+              teamName: highestSale.team.name,
+              price: highestSale.price,
+            }
+          : null,
+      },
+      teams,
+      unsold,
+    },
+  });
+}
+
 export async function closeAuction(req: Request, res: Response) {
   const { id } = req.params;
   const auction = await prisma.auction.findUnique({

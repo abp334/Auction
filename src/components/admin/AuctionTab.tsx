@@ -16,6 +16,7 @@ import {
   Pause,
   AlertTriangle,
   FileSpreadsheet,
+  FileText,
   Users,
   Trophy,
   Plus,
@@ -23,6 +24,7 @@ import {
   Image as ImageIcon,
   Download,
   Pencil,
+  StopCircle,
 } from "lucide-react";
 import {
   AlertDialog,
@@ -51,6 +53,8 @@ import {
 import { apiFetch } from "@/lib/api";
 import { parseCSV, jsonToCSV } from "@/lib/utils";
 import AuctionRoom from "@/components/auction/AuctionRoom";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
 
 const PLAYER_ROLES = [
   "Batsman",
@@ -408,48 +412,220 @@ const AuctionTab = () => {
     setLoading(false);
   };
 
+  const formatINR = (amount: number) => `₹${amount.toLocaleString("en-IN")}`;
+
+  const generateCSV = (report: any) => {
+    const flatReport: any[] = [];
+    report.teams.forEach((t: any) => {
+      t.Roster.forEach((p: any) => {
+        flatReport.push({
+          Status: "SOLD",
+          Team: t.TeamName,
+          Captain: t.Captain,
+          Player: p.Name,
+          Role: p.Role,
+          BasePrice: p.BasePrice || p.SoldPrice,
+          SoldPrice: p.SoldPrice || p.Price,
+        });
+      });
+    });
+    report.unsold.forEach((p: any) => {
+      flatReport.push({
+        Status: "UNSOLD",
+        Team: "-",
+        Captain: "-",
+        Player: p.Name,
+        Role: p.Role,
+        BasePrice: p.BasePrice,
+        SoldPrice: 0,
+      });
+    });
+
+    const csvContent = jsonToCSV(flatReport);
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `Results_${(report.auctionName || auctionName).replace(/\s+/g, "_")}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const generatePDF = (report: any) => {
+    const doc = new jsPDF();
+    const name = report.auctionName || auctionName || "Auction";
+    const dateStr = new Date(report.date || Date.now()).toLocaleDateString("en-IN", {
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+    });
+
+    // Title
+    doc.setFontSize(22);
+    doc.setFont("helvetica", "bold");
+    doc.text(name, 14, 20);
+    doc.setFontSize(11);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(100);
+    doc.text(`Auction Report • ${dateStr}`, 14, 28);
+    doc.setTextColor(0);
+
+    // Summary stats
+    const summary = report.summary || {};
+    let y = 38;
+    doc.setFontSize(13);
+    doc.setFont("helvetica", "bold");
+    doc.text("Summary", 14, y);
+    y += 8;
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "normal");
+
+    const totalSold = summary.totalSold ?? report.teams.reduce((s: number, t: any) => s + (t.Roster?.length || 0), 0);
+    const totalUnsold = summary.totalUnsold ?? (report.unsold?.length || 0);
+    const totalSpent = summary.totalSpent ?? report.teams.reduce((s: number, t: any) => s + (t.TotalSpent || 0), 0);
+    const highestSale = summary.highestSale;
+
+    doc.text(`Total Players: ${totalSold + totalUnsold}`, 14, y);
+    doc.text(`Sold: ${totalSold}`, 70, y);
+    doc.text(`Unsold: ${totalUnsold}`, 110, y);
+    y += 6;
+    doc.text(`Total Amount Spent: ${formatINR(totalSpent)}`, 14, y);
+    if (highestSale) {
+      y += 6;
+      doc.text(
+        `Highest Sale: ${highestSale.playerName} → ${highestSale.teamName} for ${formatINR(highestSale.price)}`,
+        14,
+        y
+      );
+    }
+    y += 12;
+
+    // Team-wise breakdown
+    report.teams.forEach((team: any) => {
+      if (y > 260) {
+        doc.addPage();
+        y = 20;
+      }
+
+      doc.setFontSize(12);
+      doc.setFont("helvetica", "bold");
+      doc.text(`${team.TeamName}`, 14, y);
+      doc.setFontSize(9);
+      doc.setFont("helvetica", "normal");
+      doc.text(
+        `Captain: ${team.Captain} | Spent: ${formatINR(team.TotalSpent)} | Remaining: ${formatINR(team.RemainingPurse)}`,
+        14,
+        y + 5
+      );
+      y += 10;
+
+      if (team.Roster && team.Roster.length > 0) {
+        autoTable(doc, {
+          startY: y,
+          head: [["Player", "Role", "Sold Price"]],
+          body: team.Roster.map((p: any) => [
+            p.Name,
+            p.Role || "-",
+            formatINR(p.SoldPrice || p.Price || 0),
+          ]),
+          theme: "striped",
+          headStyles: { fillColor: [245, 158, 11], textColor: 0, fontStyle: "bold" },
+          styles: { fontSize: 9 },
+          margin: { left: 14 },
+        });
+        y = (doc as any).lastAutoTable.finalY + 10;
+      } else {
+        doc.text("  No players acquired.", 14, y);
+        y += 8;
+      }
+    });
+
+    // Unsold players
+    if (report.unsold && report.unsold.length > 0) {
+      if (y > 240) {
+        doc.addPage();
+        y = 20;
+      }
+      doc.setFontSize(12);
+      doc.setFont("helvetica", "bold");
+      doc.text("Unsold Players", 14, y);
+      y += 4;
+
+      autoTable(doc, {
+        startY: y,
+        head: [["Player", "Role", "Base Price"]],
+        body: report.unsold.map((p: any) => [
+          p.Name,
+          p.Role || "-",
+          formatINR(p.BasePrice || 0),
+        ]),
+        theme: "striped",
+        headStyles: { fillColor: [239, 68, 68], textColor: 255, fontStyle: "bold" },
+        styles: { fontSize: 9 },
+        margin: { left: 14 },
+      });
+    }
+
+    doc.save(`${name.replace(/\s+/g, "_")}_Report.pdf`);
+  };
+
+  const downloadCSV = async () => {
+    if (!currentAuction) return;
+    setLoading(true);
+    try {
+      const res = await apiFetch(`/auctions/${currentAuction.id}/report`);
+      if (res.ok) {
+        const { report } = await res.json();
+        generateCSV(report);
+        toast({ title: "CSV Downloaded", description: "Results exported." });
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const downloadPDF = async () => {
+    if (!currentAuction) return;
+    setLoading(true);
+    try {
+      const res = await apiFetch(`/auctions/${currentAuction.id}/report`);
+      if (res.ok) {
+        const { report } = await res.json();
+        generatePDF(report);
+        toast({ title: "PDF Downloaded", description: "Full report exported." });
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const closeAndWipe = async () => {
     if (!currentAuction) return;
     setShowEndConfirm(false);
     setLoading(true);
     try {
       const aId = currentAuction.id;
+      // Fetch report before closing (for PDF + CSV)
+      const reportRes = await apiFetch(`/auctions/${aId}/report`);
+      let report: any = null;
+      if (reportRes.ok) {
+        const data = await reportRes.json();
+        report = data.report;
+      }
+
       const res = await apiFetch(`/auctions/${aId}/close`, {
         method: "POST",
       });
       if (res.ok) {
-        const { report } = await res.json();
-        const flatReport: any[] = [];
-        report.teams.forEach((t: any) => {
-          t.Roster.forEach((p: any) => {
-            flatReport.push({
-              Status: "SOLD",
-              Team: t.TeamName,
-              Captain: t.Captain,
-              Player: p.Name,
-              Price: p.Price,
-            });
-          });
-        });
-        report.unsold.forEach((p: any) => {
-          flatReport.push({
-            Status: "UNSOLD",
-            Team: "-",
-            Captain: "-",
-            Player: p.Name,
-            Price: 0,
-          });
-        });
-
-        const csvContent = jsonToCSV(flatReport);
-        const blob = new Blob([csvContent], {
-          type: "text/csv;charset=utf-8;",
-        });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `Results_${auctionName.replace(/\s+/g, "_")}.csv`;
-        a.click();
+        // Use the pre-fetched report (close endpoint wipes data)
+        if (report) {
+          generateCSV(report);
+          generatePDF(report);
+        } else {
+          // Fallback: use whatever close returns
+          const { report: closeReport } = await res.json();
+          if (closeReport) generateCSV(closeReport);
+        }
 
         setCurrentAuction(null);
         setTeamsData([]);
@@ -457,7 +633,7 @@ const AuctionTab = () => {
         setAuctionName("");
         toast({
           title: "Auction Closed",
-          description: "Results saved and data wiped.",
+          description: "PDF & CSV saved. Data wiped.",
         });
       }
     } finally {
@@ -1122,21 +1298,21 @@ const AuctionTab = () => {
               {currentAuction.state === "draft" ? (
                 <Button
                   onClick={startAuction}
-                  className="bg-green-600 hover:bg-green-700 h-20 text-xl font-bold"
+                  className="bg-green-600 hover:bg-green-700 h-16 text-xl font-bold"
                 >
                   <Play className="mr-3 fill-current" /> Start Auction
                 </Button>
               ) : currentAuction.state === "paused" ? (
                 <Button
                   onClick={resumeAuction}
-                  className="bg-green-600 hover:bg-green-700 h-20 text-xl font-bold"
+                  className="bg-green-600 hover:bg-green-700 h-16 text-xl font-bold"
                 >
                   <Play className="mr-3 fill-current" /> Resume
                 </Button>
               ) : (
                 <Button
                   onClick={pauseAuction}
-                  className="bg-yellow-600 hover:bg-yellow-700 h-20 text-xl font-bold text-black"
+                  className="bg-yellow-600 hover:bg-yellow-700 h-16 text-xl font-bold text-black"
                 >
                   <Pause className="mr-3 fill-current" /> Pause
                 </Button>
@@ -1144,9 +1320,28 @@ const AuctionTab = () => {
               <Button
                 onClick={() => setShowEndConfirm(true)}
                 variant="destructive"
-                className="h-20 text-xl border-2 border-red-900/50 bg-transparent text-red-500 font-bold"
+                className="h-16 text-xl border-2 border-red-900/50 bg-transparent text-red-500 font-bold"
               >
-                <FileSpreadsheet className="mr-2" /> End & Download CSV
+                <StopCircle className="mr-2" /> End Auction
+              </Button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <Button
+                onClick={downloadCSV}
+                disabled={loading}
+                variant="outline"
+                className="h-12 border-amber-500/50 text-amber-400 hover:bg-amber-500/10 font-semibold"
+              >
+                <FileSpreadsheet className="mr-2 w-5 h-5" /> Download CSV
+              </Button>
+              <Button
+                onClick={downloadPDF}
+                disabled={loading}
+                variant="outline"
+                className="h-12 border-blue-500/50 text-blue-400 hover:bg-blue-500/10 font-semibold"
+              >
+                <FileText className="mr-2 w-5 h-5" /> Download PDF Report
               </Button>
             </div>
 
@@ -1192,11 +1387,11 @@ const AuctionTab = () => {
         <AlertDialogContent className="bg-[#1a2332] border-red-500/50 text-white">
           <AlertDialogHeader>
             <AlertDialogTitle className="flex items-center gap-2 text-red-500">
-              <AlertTriangle /> End Auction & Wipe Data?
+              <AlertTriangle /> End Auction?
             </AlertDialogTitle>
             <AlertDialogDescription className="text-gray-300">
-              This will close the room permanently, download results, and clear
-              the database for a fresh start.
+              This will save the results as PDF & CSV, then permanently close
+              the room and wipe all auction data from the database.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -1207,7 +1402,7 @@ const AuctionTab = () => {
               onClick={closeAndWipe}
               className="bg-red-600 font-bold"
             >
-              Download & Wipe
+              End & Save Reports
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
