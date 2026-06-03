@@ -453,6 +453,7 @@ const AuctionTab = () => {
 
   const generatePDF = (report: any) => {
     const doc = new jsPDF();
+    const pageWidth = doc.internal.pageSize.getWidth();
     const name = report.auctionName || auctionName || "Auction";
     const dateStr = new Date(report.date || Date.now()).toLocaleDateString("en-IN", {
       day: "numeric",
@@ -460,114 +461,358 @@ const AuctionTab = () => {
       year: "numeric",
     });
 
-    // Title
-    doc.setFontSize(22);
-    doc.setFont("helvetica", "bold");
-    doc.text(name, 14, 20);
-    doc.setFontSize(11);
-    doc.setFont("helvetica", "normal");
-    doc.setTextColor(100);
-    doc.text(`Auction Report • ${dateStr}`, 14, 28);
-    doc.setTextColor(0);
+    const totalSold = report.summary?.totalSold ?? report.teams.reduce((s: number, t: any) => s + (t.Roster?.length || 0), 0);
+    const totalUnsold = report.summary?.totalUnsold ?? (report.unsold?.length || 0);
+    const totalPlayers = totalSold + totalUnsold;
+    const totalSpent = report.summary?.totalSpent ?? report.teams.reduce((s: number, t: any) => s + (t.TotalSpent || 0), 0);
+    const totalBids = report.summary?.totalBids ?? 0;
+    const highestSale = report.summary?.highestSale;
 
-    // Summary stats
-    const summary = report.summary || {};
-    let y = 38;
-    doc.setFontSize(13);
+    // Colors
+    const amber = [245, 158, 11];
+    const dark = [15, 20, 25];
+    const darkCard = [26, 35, 50];
+    const green = [34, 197, 94];
+    const red = [239, 68, 68];
+    const blue = [59, 130, 246];
+    const purple = [168, 85, 247];
+    const gray = [156, 163, 175];
+
+    // Team colors for charts
+    const teamColors = [
+      [245, 158, 11], [59, 130, 246], [34, 197, 94], [168, 85, 247],
+      [236, 72, 153], [20, 184, 166], [249, 115, 22], [99, 102, 241],
+    ];
+
+    // ===== PAGE 1: COVER + SUMMARY =====
+
+    // Dark background header
+    doc.setFillColor(dark[0], dark[1], dark[2]);
+    doc.rect(0, 0, pageWidth, 55, "F");
+
+    // Accent bar
+    doc.setFillColor(amber[0], amber[1], amber[2]);
+    doc.rect(0, 55, pageWidth, 3, "F");
+
+    // Title on dark bg
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(26);
     doc.setFont("helvetica", "bold");
-    doc.text("Summary", 14, y);
-    y += 8;
+    doc.text(name, 14, 25);
+
+    doc.setFontSize(12);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(amber[0], amber[1], amber[2]);
+    doc.text("AUCTION REPORT", 14, 35);
+
+    doc.setTextColor(180, 180, 180);
     doc.setFontSize(10);
-    doc.setFont("helvetica", "normal");
+    doc.text(dateStr, 14, 45);
 
-    const totalSold = summary.totalSold ?? report.teams.reduce((s: number, t: any) => s + (t.Roster?.length || 0), 0);
-    const totalUnsold = summary.totalUnsold ?? (report.unsold?.length || 0);
-    const totalSpent = summary.totalSpent ?? report.teams.reduce((s: number, t: any) => s + (t.TotalSpent || 0), 0);
-    const highestSale = summary.highestSale;
+    // Summary stat cards
+    let y = 70;
+    const cardW = (pageWidth - 42) / 4;
+    const cardH = 28;
+    const stats = [
+      { label: "Total Players", value: String(totalPlayers), color: amber },
+      { label: "Sold", value: String(totalSold), color: green },
+      { label: "Unsold", value: String(totalUnsold), color: red },
+      { label: "Total Bids", value: String(totalBids), color: blue },
+    ];
 
-    doc.text(`Total Players: ${totalSold + totalUnsold}`, 14, y);
-    doc.text(`Sold: ${totalSold}`, 70, y);
-    doc.text(`Unsold: ${totalUnsold}`, 110, y);
-    y += 6;
-    doc.text(`Total Amount Spent: ${formatINR(totalSpent)}`, 14, y);
-    if (highestSale) {
-      y += 6;
-      doc.text(
-        `Highest Sale: ${highestSale.playerName} → ${highestSale.teamName} for ${formatINR(highestSale.price)}`,
-        14,
-        y
-      );
-    }
-    y += 12;
-
-    // Team-wise breakdown
-    report.teams.forEach((team: any) => {
-      if (y > 260) {
-        doc.addPage();
-        y = 20;
-      }
-
-      doc.setFontSize(12);
+    stats.forEach((stat, i) => {
+      const x = 14 + i * (cardW + 4);
+      doc.setFillColor(darkCard[0], darkCard[1], darkCard[2]);
+      doc.roundedRect(x, y, cardW, cardH, 3, 3, "F");
+      doc.setFontSize(18);
       doc.setFont("helvetica", "bold");
-      doc.text(`${team.TeamName}`, 14, y);
-      doc.setFontSize(9);
+      doc.setTextColor(stat.color[0], stat.color[1], stat.color[2]);
+      doc.text(stat.value, x + cardW / 2, y + 13, { align: "center" });
+      doc.setFontSize(7);
       doc.setFont("helvetica", "normal");
-      doc.text(
-        `Captain: ${team.Captain} | Spent: ${formatINR(team.TotalSpent)} | Remaining: ${formatINR(team.RemainingPurse)}`,
-        14,
-        y + 5
-      );
-      y += 10;
-
-      if (team.Roster && team.Roster.length > 0) {
-        autoTable(doc, {
-          startY: y,
-          head: [["Player", "Role", "Sold Price"]],
-          body: team.Roster.map((p: any) => [
-            p.Name,
-            p.Role || "-",
-            formatINR(p.SoldPrice || p.Price || 0),
-          ]),
-          theme: "striped",
-          headStyles: { fillColor: [245, 158, 11], textColor: 0, fontStyle: "bold" },
-          styles: { fontSize: 9 },
-          margin: { left: 14 },
-        });
-        y = (doc as any).lastAutoTable.finalY + 10;
-      } else {
-        doc.text("  No players acquired.", 14, y);
-        y += 8;
-      }
+      doc.setTextColor(gray[0], gray[1], gray[2]);
+      doc.text(stat.label.toUpperCase(), x + cardW / 2, y + 22, { align: "center" });
     });
 
-    // Unsold players
-    if (report.unsold && report.unsold.length > 0) {
+    // Total Spent + Highest Sale row
+    y += cardH + 10;
+    doc.setFillColor(darkCard[0], darkCard[1], darkCard[2]);
+    doc.roundedRect(14, y, pageWidth - 28, 22, 3, 3, "F");
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(gray[0], gray[1], gray[2]);
+    doc.text("TOTAL SPENT", 22, y + 9);
+    doc.setFontSize(14);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(amber[0], amber[1], amber[2]);
+    doc.text(formatINR(totalSpent), 22, y + 17);
+
+    if (highestSale) {
+      doc.setFontSize(10);
+      doc.setFont("helvetica", "normal");
+      doc.setTextColor(gray[0], gray[1], gray[2]);
+      doc.text("HIGHEST SALE", pageWidth / 2 + 10, y + 9);
+      doc.setFontSize(12);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(green[0], green[1], green[2]);
+      doc.text(
+        `${highestSale.playerName} → ${highestSale.teamName} (${formatINR(highestSale.price)})`,
+        pageWidth / 2 + 10,
+        y + 17
+      );
+    }
+
+    // ===== TEAM SPENDING BAR CHART =====
+    y += 35;
+    doc.setFontSize(13);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(dark[0], dark[1], dark[2]);
+    doc.text("Team Spending Comparison", 14, y);
+    y += 8;
+
+    const maxSpent = Math.max(...report.teams.map((t: any) => t.TotalSpent || 0), 1);
+    const barMaxWidth = pageWidth - 80;
+    const barH = 10;
+    const barGap = 4;
+
+    report.teams.forEach((team: any, i: number) => {
+      if (y > 270) { doc.addPage(); y = 20; }
+      const color = teamColors[i % teamColors.length];
+      const barWidth = Math.max(((team.TotalSpent || 0) / maxSpent) * barMaxWidth, 2);
+
+      // Team name
+      doc.setFontSize(8);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(50, 50, 50);
+      const truncatedName = team.TeamName.length > 12 ? team.TeamName.substring(0, 12) + "…" : team.TeamName;
+      doc.text(truncatedName, 14, y + barH / 2 + 1);
+
+      // Bar background
+      doc.setFillColor(240, 240, 240);
+      doc.roundedRect(55, y, barMaxWidth, barH, 2, 2, "F");
+
+      // Bar fill
+      doc.setFillColor(color[0], color[1], color[2]);
+      doc.roundedRect(55, y, barWidth, barH, 2, 2, "F");
+
+      // Value label
+      doc.setFontSize(7);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(80, 80, 80);
+      doc.text(formatINR(team.TotalSpent || 0), 55 + barMaxWidth + 3, y + barH / 2 + 1);
+
+      y += barH + barGap;
+    });
+
+    // ===== PIE CHART: Sold vs Unsold =====
+    y += 10;
+    if (y > 210) { doc.addPage(); y = 20; }
+
+    doc.setFontSize(13);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(dark[0], dark[1], dark[2]);
+    doc.text("Player Auction Outcome", 14, y);
+    y += 5;
+
+    const pieX = 50;
+    const pieY = y + 30;
+    const pieR = 25;
+
+    if (totalPlayers > 0) {
+      const soldAngle = (totalSold / totalPlayers) * 2 * Math.PI;
+
+      // Draw sold segment (green)
+      doc.setFillColor(green[0], green[1], green[2]);
+      drawPieSlice(doc, pieX, pieY, pieR, 0, soldAngle);
+
+      // Draw unsold segment (red)
+      if (totalUnsold > 0) {
+        doc.setFillColor(red[0], red[1], red[2]);
+        drawPieSlice(doc, pieX, pieY, pieR, soldAngle, 2 * Math.PI);
+      }
+
+      // Center circle (donut effect)
+      doc.setFillColor(255, 255, 255);
+      doc.circle(pieX, pieY, pieR * 0.55, "F");
+
+      // Center text
+      doc.setFontSize(14);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(dark[0], dark[1], dark[2]);
+      doc.text(`${Math.round((totalSold / totalPlayers) * 100)}%`, pieX, pieY + 2, { align: "center" });
+      doc.setFontSize(6);
+      doc.setTextColor(gray[0], gray[1], gray[2]);
+      doc.text("SOLD", pieX, pieY + 7, { align: "center" });
+
+      // Legend
+      const legendX = pieX + pieR + 20;
+      doc.setFillColor(green[0], green[1], green[2]);
+      doc.circle(legendX, pieY - 6, 3, "F");
+      doc.setFontSize(9);
+      doc.setTextColor(50, 50, 50);
+      doc.setFont("helvetica", "normal");
+      doc.text(`Sold: ${totalSold} players`, legendX + 6, pieY - 4);
+
+      doc.setFillColor(red[0], red[1], red[2]);
+      doc.circle(legendX, pieY + 6, 3, "F");
+      doc.text(`Unsold: ${totalUnsold} players`, legendX + 6, pieY + 8);
+    }
+
+    y = pieY + pieR + 15;
+
+    // ===== PAGE 2+: TEAM ROSTERS =====
+    doc.addPage();
+    y = 15;
+
+    // Section header
+    doc.setFillColor(dark[0], dark[1], dark[2]);
+    doc.rect(0, 0, pageWidth, 20, "F");
+    doc.setFillColor(amber[0], amber[1], amber[2]);
+    doc.rect(0, 20, pageWidth, 2, "F");
+    doc.setFontSize(14);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(255, 255, 255);
+    doc.text("Team Rosters", 14, 14);
+    y = 30;
+
+    report.teams.forEach((team: any, tIdx: number) => {
       if (y > 240) {
         doc.addPage();
         y = 20;
       }
-      doc.setFontSize(12);
+
+      const color = teamColors[tIdx % teamColors.length];
+
+      // Team header card
+      doc.setFillColor(color[0], color[1], color[2]);
+      doc.roundedRect(14, y, pageWidth - 28, 16, 2, 2, "F");
+      doc.setFontSize(11);
       doc.setFont("helvetica", "bold");
-      doc.text("Unsold Players", 14, y);
-      y += 4;
+      doc.setTextColor(255, 255, 255);
+      doc.text(team.TeamName, 20, y + 7);
+      doc.setFontSize(8);
+      doc.setFont("helvetica", "normal");
+      doc.text(
+        `Captain: ${team.Captain}  |  Players: ${team.PlayersCount}  |  Spent: ${formatINR(team.TotalSpent)}  |  Purse Left: ${formatINR(team.RemainingPurse)}`,
+        20,
+        y + 13
+      );
+      y += 20;
+
+      if (team.Roster && team.Roster.length > 0) {
+        autoTable(doc, {
+          startY: y,
+          head: [["#", "Player", "Role", "Sold Price"]],
+          body: team.Roster.map((p: any, idx: number) => [
+            String(idx + 1),
+            p.Name,
+            p.Role || "-",
+            formatINR(p.SoldPrice || p.Price || 0),
+          ]),
+          theme: "grid",
+          headStyles: {
+            fillColor: [color[0], color[1], color[2]],
+            textColor: 255,
+            fontStyle: "bold",
+            fontSize: 8,
+          },
+          bodyStyles: { fontSize: 8 },
+          alternateRowStyles: { fillColor: [248, 250, 252] },
+          columnStyles: {
+            0: { cellWidth: 10, halign: "center" },
+            3: { halign: "right", fontStyle: "bold" },
+          },
+          margin: { left: 14, right: 14 },
+        });
+        y = (doc as any).lastAutoTable.finalY + 12;
+      } else {
+        doc.setFontSize(9);
+        doc.setTextColor(gray[0], gray[1], gray[2]);
+        doc.text("No players acquired.", 20, y + 4);
+        y += 12;
+      }
+    });
+
+    // Unsold players section
+    if (report.unsold && report.unsold.length > 0) {
+      if (y > 220) {
+        doc.addPage();
+        y = 20;
+      }
+
+      // Unsold header
+      doc.setFillColor(red[0], red[1], red[2]);
+      doc.roundedRect(14, y, pageWidth - 28, 12, 2, 2, "F");
+      doc.setFontSize(10);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(255, 255, 255);
+      doc.text(`Unsold Players (${report.unsold.length})`, 20, y + 8);
+      y += 16;
 
       autoTable(doc, {
         startY: y,
-        head: [["Player", "Role", "Base Price"]],
-        body: report.unsold.map((p: any) => [
+        head: [["#", "Player", "Role", "Base Price"]],
+        body: report.unsold.map((p: any, idx: number) => [
+          String(idx + 1),
           p.Name,
           p.Role || "-",
           formatINR(p.BasePrice || 0),
         ]),
-        theme: "striped",
-        headStyles: { fillColor: [239, 68, 68], textColor: 255, fontStyle: "bold" },
-        styles: { fontSize: 9 },
-        margin: { left: 14 },
+        theme: "grid",
+        headStyles: {
+          fillColor: [red[0], red[1], red[2]],
+          textColor: 255,
+          fontStyle: "bold",
+          fontSize: 8,
+        },
+        bodyStyles: { fontSize: 8 },
+        alternateRowStyles: { fillColor: [254, 242, 242] },
+        columnStyles: {
+          0: { cellWidth: 10, halign: "center" },
+          3: { halign: "right" },
+        },
+        margin: { left: 14, right: 14 },
       });
+    }
+
+    // Footer on every page
+    const pageCount = doc.getNumberOfPages();
+    for (let i = 1; i <= pageCount; i++) {
+      doc.setPage(i);
+      doc.setFontSize(7);
+      doc.setFont("helvetica", "normal");
+      doc.setTextColor(gray[0], gray[1], gray[2]);
+      doc.text(
+        `Generated by ClashBid • Page ${i} of ${pageCount}`,
+        pageWidth / 2,
+        doc.internal.pageSize.getHeight() - 8,
+        { align: "center" }
+      );
     }
 
     doc.save(`${name.replace(/\s+/g, "_")}_Report.pdf`);
   };
+
+  function drawPieSlice(doc: jsPDF, cx: number, cy: number, r: number, startAngle: number, endAngle: number) {
+    const steps = 50;
+    const angleStep = (endAngle - startAngle) / steps;
+    // Build points array: center, arc points, back to center
+    const points: [number, number][] = [[cx, cy]];
+    for (let i = 0; i <= steps; i++) {
+      const angle = startAngle + i * angleStep - Math.PI / 2;
+      points.push([cx + r * Math.cos(angle), cy + r * Math.sin(angle)]);
+    }
+    points.push([cx, cy]);
+
+    // Convert to PDF coordinates and draw filled polygon via raw PDF operators
+    const pageH = doc.internal.pageSize.getHeight();
+    const k = 72 / 25.4; // mm to points
+    const pdfPoints = points.map((p) => [p[0] * k, (pageH - p[1]) * k] as [number, number]);
+    const pathOps = pdfPoints
+      .map((p, i) => `${p[0].toFixed(2)} ${p[1].toFixed(2)} ${i === 0 ? "m" : "l"}`)
+      .join(" ");
+    (doc as any).internal.out(pathOps + " f");
+  }
 
   const downloadCSV = async () => {
     if (!currentAuction) return;
