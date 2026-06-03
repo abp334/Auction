@@ -328,7 +328,7 @@ const TeamsTab = () => {
                   )}
                 </div>
                 <div className="space-y-2 col-span-2">
-                  <Label htmlFor="purse">Starting Purse ($)</Label>
+                  <Label htmlFor="purse">Starting Purse (₹)</Label>
                   <Input
                     id="purse"
                     type="number"

@@ -446,6 +446,7 @@ export async function startAuction(req: Request, res: Response) {
               photo: player.photo || "",
               age: player.age || 25,
               role: player.role || "",
+              batsmanType: player.batsmanType || "",
               bowlerType: player.bowlerType || "",
               basePrice: player.basePrice || 1000,
             }
@@ -871,6 +872,7 @@ export async function setCurrentPlayer(req: Request, res: Response) {
           photo: player.photo || "",
           age: player.age || 25,
           role: player.role,
+          batsmanType: player.batsmanType || "",
           bowlerType: player.bowlerType || "",
           basePrice: player.basePrice,
         },

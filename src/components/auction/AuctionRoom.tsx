@@ -31,6 +31,7 @@ interface Player {
   basePrice: number;
   currentBid: number;
   age: number;
+  role: string;
   batsmanType: string;
   bowlerType: string;
 }
@@ -127,8 +128,9 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
             basePrice: p.basePrice || 0,
             currentBid: salePrices.get(String(p.id)) || p.basePrice || 0,
             age: p.age || 25,
-            batsmanType: p.role || "",
-            bowlerType: p.bowlerType || "Not a Bowler",
+            role: p.role || "",
+            batsmanType: p.batsmanType || "",
+            bowlerType: p.bowlerType || "",
           }))
         );
       } catch (err) {
@@ -231,8 +233,9 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
             basePrice: player.basePrice || 1000,
             currentBid: a.currentBid?.amount || player.basePrice || 1000,
             age: player.age || 25,
-            batsmanType: player.role || "",
-            bowlerType: player.bowlerType || "Not a Bowler",
+            role: player.role || "",
+            batsmanType: player.batsmanType || "",
+            bowlerType: player.bowlerType || "",
           };
           setCurrentPlayer(nextPlayer);
           return {
@@ -249,8 +252,9 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
             basePrice: 0,
             currentBid: 0,
             age: 0,
-            batsmanType: "Unknown",
-            bowlerType: "Unknown",
+            role: "Unknown",
+            batsmanType: "",
+            bowlerType: "",
           };
           setCurrentPlayer(missingPlayer);
           return {
@@ -364,8 +368,9 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
           basePrice: e.player.basePrice || 1000,
           currentBid: e.player.basePrice || 1000,
           age: e.player.age || 25,
-          batsmanType: e.player.role || "",
-          bowlerType: e.player.bowlerType || "Not a Bowler",
+          role: e.player.role || "",
+          batsmanType: e.player.batsmanType || "",
+          bowlerType: e.player.bowlerType || "",
         });
 
         setHasSkipped(false);
@@ -679,16 +684,25 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
                       {currentPlayer.name}
                     </h2>
 
-                    <div className="flex gap-4 text-sm mb-8 justify-center">
-                      <span className="bg-amber-500/20 px-3 py-1 rounded-full">
+                    <div className="flex flex-wrap gap-3 text-sm mb-8 justify-center">
+                      {currentPlayer.role && (
+                        <span className="bg-purple-500/20 text-purple-300 px-3 py-1 rounded-full font-semibold">
+                          {currentPlayer.role}
+                        </span>
+                      )}
+                      <span className="bg-amber-500/20 text-amber-300 px-3 py-1 rounded-full">
                         Age: {currentPlayer.age}
                       </span>
-                      <span className="bg-blue-500/20 px-3 py-1 rounded-full">
-                        ⚾ {currentPlayer.batsmanType}
-                      </span>
-                      <span className="bg-green-500/20 px-3 py-1 rounded-full">
-                        🏏 {currentPlayer.bowlerType}
-                      </span>
+                      {currentPlayer.batsmanType && (
+                        <span className="bg-blue-500/20 text-blue-300 px-3 py-1 rounded-full">
+                          🏏 {currentPlayer.batsmanType}
+                        </span>
+                      )}
+                      {currentPlayer.bowlerType && currentPlayer.bowlerType !== "None" && (
+                        <span className="bg-green-500/20 text-green-300 px-3 py-1 rounded-full">
+                          ⚾ {currentPlayer.bowlerType}
+                        </span>
+                      )}
                     </div>
 
                     <div className="w-full max-w-md space-y-6">
@@ -864,9 +878,11 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
                             <p className="font-semibold text-white">
                               {player.name}
                             </p>
-                            <div className="flex gap-2 text-xs text-gray-400 mt-1">
+                            <div className="flex flex-wrap gap-2 text-xs text-gray-400 mt-1">
+                              {player.role && <span className="text-purple-300">{player.role}</span>}
                               <span>Age: {player.age}</span>
-                              <span>⚾ {player.batsmanType}</span>
+                              {player.batsmanType && <span>🏏 {player.batsmanType}</span>}
+                              {player.bowlerType && player.bowlerType !== "None" && <span>⚾ {player.bowlerType}</span>}
                             </div>
                             <p className="text-amber-400 text-sm font-bold mt-1">
                               {formatCurrency(player.currentBid)}

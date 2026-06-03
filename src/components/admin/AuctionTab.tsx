@@ -567,7 +567,7 @@ const AuctionTab = () => {
                           />
                         </div>
                         <div className="space-y-2">
-                          <Label>Budget ($)</Label>
+                          <Label>Budget (₹)</Label>
                           <Input
                             type="number"
                             value={teamForm.wallet}

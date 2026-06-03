@@ -395,6 +395,7 @@ export async function moveToNextPlayer(auctionId: string, roomCode: string) {
             photo: player.photo || "",
             age: player.age || 25,
             role: player.role || "",
+            batsmanType: player.batsmanType || "",
             bowlerType: player.bowlerType || "",
             basePrice: player.basePrice || 1000,
           }
@@ -447,6 +448,7 @@ export async function moveToNextPlayer(auctionId: string, roomCode: string) {
         photo: remaining.photo || "",
         age: remaining.age || 25,
         role: remaining.role || "",
+        batsmanType: remaining.batsmanType || "",
         bowlerType: remaining.bowlerType || "",
         basePrice: remaining.basePrice || 1000,
       },

@@ -371,7 +371,7 @@ const PlayersTab = () => {
                 </div>
                 )}
                 <div className="space-y-2 col-span-2">
-                  <Label htmlFor="bidAmount">Starting Bid Amount ($)</Label>
+                  <Label htmlFor="bidAmount">Starting Bid Amount (₹)</Label>
                   <Input
                     id="bidAmount"
                     type="number"
