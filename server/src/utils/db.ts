@@ -1,12 +1,18 @@
 import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
+import * as pg from "pg";
 
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString) {
   throw new Error("DATABASE_URL environment variable is required");
 }
 
-const adapter = new PrismaPg({ connectionString });
+const pool = new pg.Pool({
+  connectionString,
+  max: 10,
+});
+
+const adapter = new PrismaPg(pool);
 
 const prisma = new PrismaClient({
   adapter,
