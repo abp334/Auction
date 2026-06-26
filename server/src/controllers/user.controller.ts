@@ -40,6 +40,25 @@ export async function listAdminUsers(req: Request, res: Response) {
   return res.status(StatusCodes.OK).json({ users });
 }
 
+export async function listCaptainUsers(req: Request, res: Response) {
+  const users = await prisma.user.findMany({
+    where: { role: "captain" },
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      role: true,
+      emailVerified: true,
+      createdAt: true,
+      team: { select: { id: true, name: true } },
+      auction: { select: { id: true, name: true, roomCode: true, state: true } },
+    },
+    orderBy: { createdAt: "desc" },
+  });
+
+  return res.status(StatusCodes.OK).json({ users });
+}
+
 export async function deleteUser(
   req: Request & { user?: { id: string; role: string } },
   res: Response
@@ -80,6 +99,11 @@ export async function deleteUser(
         where: { auctionId: { in: auctionIds } },
       });
       await tx.auction.deleteMany({ where: { id: { in: auctionIds } } });
+    });
+  } else if (target.role === "captain") {
+    await prisma.team.updateMany({
+      where: { captainId: id },
+      data: { captainId: null },
     });
   }
 

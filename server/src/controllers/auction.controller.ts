@@ -28,6 +28,43 @@ function buildPlayerPassword(playerName: string) {
   return playerName.replace(/\s+/g, "");
 }
 
+function normalizeEmail(email: string) {
+  return email.trim().toLowerCase();
+}
+
+/** Ensures captain/player login emails are unique within an auction import. */
+function validateParticipantEmails(
+  teams: Array<{ name?: string; captainEmail?: string | null }>,
+  players: Array<{ name?: string; email?: string | null }>
+): string | null {
+  const captainByEmail = new Map<string, string>();
+
+  for (const team of teams) {
+    const email = normalizeEmail(team.captainEmail || "");
+    if (!email) continue;
+    if (captainByEmail.has(email)) {
+      return `Duplicate captain email "${team.captainEmail}" (${captainByEmail.get(email)} and ${team.name}). Each captain must have a unique email.`;
+    }
+    captainByEmail.set(email, team.name || "Unknown team");
+  }
+
+  const playerByEmail = new Map<string, string>();
+
+  for (const player of players) {
+    const email = normalizeEmail(player.email || "");
+    if (!email) continue;
+    if (playerByEmail.has(email)) {
+      return `Duplicate player email "${player.email}" (${playerByEmail.get(email)} and ${player.name}). Each player login must have a unique email.`;
+    }
+    if (captainByEmail.has(email)) {
+      return `Email "${player.email}" is used as both captain (${captainByEmail.get(email)}) and player (${player.name}). Captain and player emails must not overlap.`;
+    }
+    playerByEmail.set(email, player.name || "Unknown player");
+  }
+
+  return null;
+}
+
 function generateRoomCode(): string {
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
   let code = "";
@@ -432,6 +469,11 @@ export async function createAuction(
   if (error)
     return res.status(StatusCodes.BAD_REQUEST).json({ error: error.message });
 
+  const emailConflict = validateParticipantEmails(value.teams, value.players);
+  if (emailConflict) {
+    return res.status(StatusCodes.BAD_REQUEST).json({ error: emailConflict });
+  }
+
   try {
     let roomCode = generateRoomCode();
     for (let attempt = 0; attempt < 5; attempt++) {
@@ -546,7 +588,7 @@ export async function createAuction(
       // Password = player full name without spaces (e.g. "Het Shah" -> "HetShah").
       const captainEmails = new Set(
         value.teams
-          .map((t: any) => (t.captainEmail || "").toLowerCase())
+          .map((t: any) => normalizeEmail(t.captainEmail || ""))
           .filter(Boolean)
       );
       let linkedPlayers = 0;
@@ -554,8 +596,8 @@ export async function createAuction(
         const inputPlayer = value.players[i];
         const email = (inputPlayer.email || "").trim();
         if (!email) continue;
-        // Skip emails already claimed as captains in this auction.
-        if (captainEmails.has(email.toLowerCase())) continue;
+        // Already validated — should never overlap captains.
+        if (captainEmails.has(normalizeEmail(email))) continue;
 
         const existing = await tx.user.findUnique({ where: { email } });
         if (!existing) {

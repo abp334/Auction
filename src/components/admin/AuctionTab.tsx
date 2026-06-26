@@ -92,6 +92,39 @@ const PHONE_REGEX = /^[+]?[\d][\d\s-]{6,14}$/;
 const isValidEmail = (value: string) => EMAIL_REGEX.test(String(value || "").trim());
 const isValidPhone = (value: string) => PHONE_REGEX.test(String(value || "").trim());
 
+function findEmailConflicts(
+  teams: { name?: string; captainEmail?: string }[],
+  players: { name?: string; email?: string }[]
+): string | null {
+  const norm = (email: string) => email.trim().toLowerCase();
+  const captainByEmail = new Map<string, string>();
+
+  for (const team of teams) {
+    const email = norm(team.captainEmail || "");
+    if (!email) continue;
+    if (captainByEmail.has(email)) {
+      return `Duplicate captain email "${team.captainEmail}" (${captainByEmail.get(email)} and ${team.name}).`;
+    }
+    captainByEmail.set(email, team.name || "Unknown team");
+  }
+
+  const playerByEmail = new Map<string, string>();
+
+  for (const player of players) {
+    const email = norm(player.email || "");
+    if (!email) continue;
+    if (playerByEmail.has(email)) {
+      return `Duplicate player email "${player.email}" (${playerByEmail.get(email)} and ${player.name}).`;
+    }
+    if (captainByEmail.has(email)) {
+      return `"${player.email}" is used as captain (${captainByEmail.get(email)}) and player (${player.name}). Use a unique email for each login.`;
+    }
+    playerByEmail.set(email, player.name || "Unknown player");
+  }
+
+  return null;
+}
+
 const noop = () => undefined;
 
 const AuctionTab = () => {
@@ -234,7 +267,17 @@ const AuctionTab = () => {
             });
             return;
           }
-          setTeamsData((prev) => [...prev, ...mappedTeams]);
+          const nextTeams = [...teamsData, ...mappedTeams];
+          const emailConflict = findEmailConflicts(nextTeams, playersData);
+          if (emailConflict) {
+            toast({
+              title: "Duplicate Email",
+              description: emailConflict,
+              variant: "destructive",
+            });
+            return;
+          }
+          setTeamsData(nextTeams);
         } else {
           const rowsMissingRole = parsed.filter((p) => !String(p.role || "").trim());
           if (rowsMissingRole.length > 0) {
@@ -284,7 +327,17 @@ const AuctionTab = () => {
             });
             return;
           }
-          setPlayersData((prev) => [...prev, ...mappedPlayers]);
+          const nextPlayers = [...playersData, ...mappedPlayers];
+          const emailConflict = findEmailConflicts(teamsData, nextPlayers);
+          if (emailConflict) {
+            toast({
+              title: "Duplicate Email",
+              description: emailConflict,
+              variant: "destructive",
+            });
+            return;
+          }
+          setPlayersData(nextPlayers);
         }
         toast({
           title: "Success",
@@ -388,6 +441,15 @@ const AuctionTab = () => {
       toast({
         title: "Validation Error",
         description: "Every player must have a role before creating an auction.",
+        variant: "destructive",
+      });
+      return;
+    }
+    const emailConflict = findEmailConflicts(teamsData, playersData);
+    if (emailConflict) {
+      toast({
+        title: "Duplicate Email",
+        description: emailConflict,
         variant: "destructive",
       });
       return;
@@ -1083,18 +1145,32 @@ const AuctionTab = () => {
                             });
                             return;
                           }
+                          const nextTeams =
+                            editTeamIndex !== null
+                              ? teamsData.map((t, idx) =>
+                                  idx === editTeamIndex ? teamForm : t
+                                )
+                              : [...teamsData, teamForm];
+                          const emailConflict = findEmailConflicts(
+                            nextTeams,
+                            playersData
+                          );
+                          if (emailConflict) {
+                            toast({
+                              title: "Duplicate Email",
+                              description: emailConflict,
+                              variant: "destructive",
+                            });
+                            return;
+                          }
                           if (editTeamIndex !== null) {
-                            setTeamsData(
-                              teamsData.map((t, idx) =>
-                                idx === editTeamIndex ? teamForm : t
-                              )
-                            );
+                            setTeamsData(nextTeams);
                             toast({
                               title: "Team Updated",
                               description: "Team details saved.",
                             });
                           } else {
-                            setTeamsData([...teamsData, teamForm]);
+                            setTeamsData(nextTeams);
                             toast({
                               title: "Team Added",
                               description:
@@ -1408,18 +1484,32 @@ const AuctionTab = () => {
                             });
                             return;
                           }
+                          const nextPlayers =
+                            editPlayerIndex !== null
+                              ? playersData.map((p, idx) =>
+                                  idx === editPlayerIndex ? playerForm : p
+                                )
+                              : [...playersData, playerForm];
+                          const emailConflict = findEmailConflicts(
+                            teamsData,
+                            nextPlayers
+                          );
+                          if (emailConflict) {
+                            toast({
+                              title: "Duplicate Email",
+                              description: emailConflict,
+                              variant: "destructive",
+                            });
+                            return;
+                          }
                           if (editPlayerIndex !== null) {
-                            setPlayersData(
-                              playersData.map((p, idx) =>
-                                idx === editPlayerIndex ? playerForm : p
-                              )
-                            );
+                            setPlayersData(nextPlayers);
                             toast({
                               title: "Player Updated",
                               description: "Player details saved.",
                             });
                           } else {
-                            setPlayersData([...playersData, playerForm]);
+                            setPlayersData(nextPlayers);
                           }
                           setPlayerForm({ ...emptyPlayerForm });
                           setEditPlayerIndex(null);
