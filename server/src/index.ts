@@ -75,6 +75,13 @@ const authLimiter = rateLimit({
 app.use("/api/v1/auth/login", authLimiter);
 app.use("/api/v1/auth/signup", authLimiter);
 
+const contactLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  message: { error: "Too many contact messages. Please try again later." },
+});
+app.use("/api/v1/contact", contactLimiter);
+
 // Health check
 app.get("/health", async (_req, res) => {
   try {

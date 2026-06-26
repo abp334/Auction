@@ -1,28 +1,46 @@
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useNavigate } from "react-router-dom";
-import { Mail, Phone, MapPin, ArrowLeft } from "lucide-react";
+import { Mail, Phone, MapPin, ArrowLeft, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { apiFetch } from "@/lib/api";
 import { z } from "zod";
+
+const CONTACT_EMAIL = "subscription.clashbid@gmail.com";
 
 const contactSchema = z.object({
   name: z.string().trim().min(1, "Name is required").max(100),
   email: z.string().trim().email("Invalid email address").max(255),
   subject: z.string().trim().min(1, "Subject is required").max(200),
-  message: z.string().trim().min(10, "Message must be at least 10 characters").max(2000),
+  message: z
+    .string()
+    .trim()
+    .min(10, "Message must be at least 10 characters")
+    .max(2000),
 });
 
 const Contact = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
+  const [submitting, setSubmitting] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
+  const openMailto = (subject: string, body: string, senderEmail: string) => {
+    const mailto = `mailto:${CONTACT_EMAIL}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    window.location.href = mailto;
+    toast({
+      title: "Opening your email app",
+      description: `Send from ${senderEmail} to ${CONTACT_EMAIL}`,
+    });
+  };
+
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
-    
+
     const data = {
       name: formData.get("name") as string,
       email: formData.get("email") as string,
@@ -32,11 +50,6 @@ const Contact = () => {
 
     try {
       contactSchema.parse(data);
-      toast({
-        title: "Message Sent!",
-        description: "We'll get back to you within 24 hours.",
-      });
-      e.currentTarget.reset();
     } catch (error) {
       if (error instanceof z.ZodError) {
         toast({
@@ -45,6 +58,48 @@ const Contact = () => {
           variant: "destructive",
         });
       }
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const res = await apiFetch("/contact", {
+        method: "POST",
+        body: JSON.stringify(data),
+      });
+
+      if (res.ok) {
+        toast({
+          title: "Message sent!",
+          description: "We'll get back to you within 24 hours.",
+        });
+        e.currentTarget.reset();
+        return;
+      }
+
+      const err = await res.json().catch(() => ({}));
+      if (err.mailto) {
+        openMailto(
+          data.subject,
+          `From: ${data.name} (${data.email})\n\n${data.message}`,
+          data.email
+        );
+        return;
+      }
+
+      toast({
+        title: "Could not send",
+        description: err.error || "Please email us directly.",
+        variant: "destructive",
+      });
+    } catch {
+      openMailto(
+        data.subject,
+        `From: ${data.name} (${data.email})\n\n${data.message}`,
+        data.email
+      );
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -68,7 +123,7 @@ const Contact = () => {
           <div className="text-center mb-12">
             <h1 className="text-5xl font-bold text-white mb-4">Get in Touch</h1>
             <p className="text-xl text-gray-300">
-              Have questions? We're here to help.
+              Questions about ClashBid? We're here to help.
             </p>
           </div>
 
@@ -79,8 +134,15 @@ const Contact = () => {
                   <Mail className="w-8 h-8 text-amber-500" />
                 </div>
                 <h3 className="text-lg font-bold text-white mb-2">Email</h3>
-                <p className="text-gray-300">support@auctionpro.com</p>
-                <p className="text-gray-400 text-sm mt-1">sales@auctionpro.com</p>
+                <a
+                  href={`mailto:${CONTACT_EMAIL}`}
+                  className="text-amber-400 hover:text-amber-300 transition break-all"
+                >
+                  {CONTACT_EMAIL}
+                </a>
+                <p className="text-gray-400 text-sm mt-2">
+                  Subscriptions, demos & support
+                </p>
               </CardContent>
             </Card>
 
@@ -90,8 +152,10 @@ const Contact = () => {
                   <Phone className="w-8 h-8 text-amber-500" />
                 </div>
                 <h3 className="text-lg font-bold text-white mb-2">Phone</h3>
-                <p className="text-gray-300">+1 (555) 123-4567</p>
-                <p className="text-gray-400 text-sm mt-1">Mon-Fri, 9am-6pm EST</p>
+                <p className="text-gray-300">Coming soon</p>
+                <p className="text-gray-400 text-sm mt-1">
+                  Voice support launching shortly
+                </p>
               </CardContent>
             </Card>
 
@@ -101,36 +165,50 @@ const Contact = () => {
                   <MapPin className="w-8 h-8 text-amber-500" />
                 </div>
                 <h3 className="text-lg font-bold text-white mb-2">Office</h3>
-                <p className="text-gray-300">123 Tech Street</p>
-                <p className="text-gray-400 text-sm mt-1">San Francisco, CA 94105</p>
+                <p className="text-gray-300">Ahmedabad</p>
+                <p className="text-gray-400 text-sm mt-1">
+                  Gujarat, India
+                </p>
               </CardContent>
             </Card>
           </div>
 
           <Card className="bg-[#1a2332] border-amber-500/30">
             <CardContent className="pt-6">
-              <h2 className="text-2xl font-bold text-white mb-6">Send Us a Message</h2>
+              <h2 className="text-2xl font-bold text-white mb-2">
+                Send Us a Message
+              </h2>
+              <p className="text-gray-400 text-sm mb-6">
+                Fill out the form below — it goes straight to{" "}
+                <span className="text-amber-400">{CONTACT_EMAIL}</span>
+              </p>
               <form onSubmit={handleSubmit} className="space-y-6">
                 <div className="grid md:grid-cols-2 gap-6">
                   <div className="space-y-2">
-                    <Label htmlFor="name" className="text-white">Name *</Label>
+                    <Label htmlFor="name" className="text-white">
+                      Name *
+                    </Label>
                     <Input
                       id="name"
                       name="name"
                       required
                       maxLength={100}
+                      disabled={submitting}
                       className="bg-[#0f1419] border-amber-500/30 text-white"
                       placeholder="Your name"
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="email" className="text-white">Email *</Label>
+                    <Label htmlFor="email" className="text-white">
+                      Email *
+                    </Label>
                     <Input
                       id="email"
                       name="email"
                       type="email"
                       required
                       maxLength={255}
+                      disabled={submitting}
                       className="bg-[#0f1419] border-amber-500/30 text-white"
                       placeholder="your@email.com"
                     />
@@ -138,19 +216,24 @@ const Contact = () => {
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="subject" className="text-white">Subject *</Label>
+                  <Label htmlFor="subject" className="text-white">
+                    Subject *
+                  </Label>
                   <Input
                     id="subject"
                     name="subject"
                     required
                     maxLength={200}
+                    disabled={submitting}
                     className="bg-[#0f1419] border-amber-500/30 text-white"
                     placeholder="What's this about?"
                   />
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="message" className="text-white">Message *</Label>
+                  <Label htmlFor="message" className="text-white">
+                    Message *
+                  </Label>
                   <Textarea
                     id="message"
                     name="message"
@@ -158,6 +241,7 @@ const Contact = () => {
                     minLength={10}
                     maxLength={2000}
                     rows={6}
+                    disabled={submitting}
                     className="bg-[#0f1419] border-amber-500/30 text-white resize-none"
                     placeholder="Tell us how we can help..."
                   />
@@ -165,10 +249,18 @@ const Contact = () => {
 
                 <Button
                   type="submit"
-                  className="w-full bg-amber-500 hover:bg-amber-600 text-primary font-bold"
+                  disabled={submitting}
+                  className="w-full bg-amber-500 hover:bg-amber-600 text-black font-bold"
                   size="lg"
                 >
-                  Send Message
+                  {submitting ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Sending…
+                    </>
+                  ) : (
+                    "Send Message"
+                  )}
                 </Button>
               </form>
             </CardContent>

@@ -6,6 +6,7 @@ import playerRoutes from "./v1/player.routes.js";
 import auctionRoutes from "./v1/auction.routes.js";
 import userRoutes from "./v1/user.routes.js";
 import inviteRoutes from "./v1/invite.routes.js";
+import contactRoutes from "./v1/contact.routes.js";
 
 export const apiRouter = Router();
 
@@ -15,3 +16,4 @@ apiRouter.use("/v1/players", playerRoutes);
 apiRouter.use("/v1/auctions", auctionRoutes);
 apiRouter.use("/v1/users", userRoutes);
 apiRouter.use("/v1/invites", inviteRoutes);
+apiRouter.use("/v1/contact", contactRoutes);
