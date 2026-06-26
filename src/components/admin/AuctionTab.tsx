@@ -155,17 +155,32 @@ const AuctionTab = () => {
     checkActive();
   }, []);
 
-  // Poll for updates if active
+  // Poll lightweight live snapshot when auction is running (full fetch only on setup)
   useEffect(() => {
     if (!currentAuction || currentAuction.state === "completed") return;
     const aId = currentAuction.id;
-    const interval = setInterval(async () => {
-      const res = await apiFetch(`/auctions/${aId}`);
-      if (res.ok) {
-        const { auction } = await res.json();
-        setCurrentAuction(auction);
+    const useLivePoll =
+      currentAuction.state === "active" || currentAuction.state === "paused";
+
+    const poll = async () => {
+      const path = useLivePoll ? `/auctions/${aId}/live` : `/auctions/${aId}`;
+      const res = await apiFetch(path);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (useLivePoll && data.live) {
+        setCurrentAuction((prev: any) => ({
+          ...prev,
+          ...data.live,
+          sales: data.live.sales || prev?.sales || [],
+          unsoldPlayers: Array.from({ length: data.live.unsoldCount || 0 }),
+        }));
+      } else if (data.auction) {
+        setCurrentAuction(data.auction);
       }
-    }, 5000);
+    };
+
+    poll();
+    const interval = setInterval(poll, useLivePoll ? 10000 : 5000);
     return () => clearInterval(interval);
   }, [currentAuction?.id, currentAuction?.state]);
 

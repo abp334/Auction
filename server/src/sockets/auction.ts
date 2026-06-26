@@ -10,6 +10,10 @@ function getMinimumBid(currentPrice: number, hasCurrentBid: boolean) {
   return hasCurrentBid ? currentPrice + BID_INCREMENT : currentPrice;
 }
 
+function rejectBid(socket: Socket, reason: string) {
+  socket.emit("auction:bid_rejected", { reason });
+}
+
 export function registerAuctionSocketHandlers(
   io: Server,
   socket: Socket
@@ -88,12 +92,18 @@ export function registerAuctionSocketHandlers(
     }) => {
       try {
         const { auctionId, roomCode, amount, teamId, playerId } = payload;
-        if (!auctionId || !roomCode || !teamId || !amount) return;
+        if (!auctionId || !roomCode || !teamId || !amount) {
+          rejectBid(socket, "Invalid bid payload.");
+          return;
+        }
 
         const socketUser = (socket.data as any)?.user as
           | { id: string; role: string }
           | undefined;
-        if (!socketUser) return;
+        if (!socketUser) {
+          rejectBid(socket, "You must be logged in to bid.");
+          return;
+        }
 
         if (socketUser.role === "captain") {
           let captainTeamId = (socket.data as any)?.teamId;
@@ -105,7 +115,10 @@ export function registerAuctionSocketHandlers(
             captainTeamId = dbUser?.teamId;
             (socket.data as any).teamId = captainTeamId;
           }
-          if (!captainTeamId || captainTeamId !== teamId) return;
+          if (!captainTeamId || captainTeamId !== teamId) {
+            rejectBid(socket, "Captains may only bid for their own team.");
+            return;
+          }
         }
 
         // Redis-based deduplication (300ms window)
@@ -122,14 +135,23 @@ export function registerAuctionSocketHandlers(
           prisma.auction.findUnique({ where: { id: auctionId } }),
           prisma.team.findUnique({ where: { id: teamId } }),
         ]);
-        if (!auction || auction.state !== "active") return;
-        if (!team) return;
+        if (!auction || auction.state !== "active") {
+          rejectBid(socket, "Auction is not active.");
+          return;
+        }
+        if (!team) {
+          rejectBid(socket, "Team not found.");
+          return;
+        }
 
         // Squad size check (was missing in socket path before)
         const currentSquadSize = await prisma.player.count({
           where: { teamId: team.id },
         });
-        if (currentSquadSize >= (auction.maxSquadSize || 25)) return;
+        if (currentSquadSize >= (auction.maxSquadSize || 25)) {
+          rejectBid(socket, `Squad full (Max ${auction.maxSquadSize || 25} players).`);
+          return;
+        }
 
         let currentPrice = 0;
         if (auction.currentBidAmount) {
@@ -139,7 +161,10 @@ export function registerAuctionSocketHandlers(
             where: { id: auction.currentPlayerId },
             select: { basePrice: true },
           });
-          if (!player) return;
+          if (!player) {
+            rejectBid(socket, "No active player.");
+            return;
+          }
           currentPrice = player.basePrice || 0;
         }
 
@@ -147,9 +172,18 @@ export function registerAuctionSocketHandlers(
         const minBid = auction.currentBidAmount
           ? currentPrice + increment
           : currentPrice;
-        if (amount < minBid) return;
+        if (amount < minBid) {
+          rejectBid(
+            socket,
+            `Bid too low. Minimum required: ₹${minBid.toLocaleString("en-IN")}.`
+          );
+          return;
+        }
 
-        if (team.wallet < amount) return;
+        if (team.wallet < amount) {
+          rejectBid(socket, "Insufficient budget.");
+          return;
+        }
 
         if (
           auction.currentPlayerId &&
@@ -195,7 +229,10 @@ export function registerAuctionSocketHandlers(
           });
         });
 
-        if (!updated) return;
+        if (!updated) {
+          rejectBid(socket, "Another team placed a higher bid.");
+          return;
+        }
 
         resetAuctionTimer(auctionId, updated.roomCode).catch((err) =>
           logger.error({ err }, "Socket bid timer reset failed")
@@ -209,6 +246,7 @@ export function registerAuctionSocketHandlers(
         });
       } catch (err) {
         logger.error({ err }, "Socket bid error");
+        rejectBid(socket, "Bid failed due to a server error.");
       }
     }
   );

@@ -45,6 +45,14 @@ interface Team {
   players: number;
 }
 
+interface BidAuditEntry {
+  id: string;
+  at: string;
+  teamName: string;
+  amount: number;
+  playerName: string;
+}
+
 const BID_INCREMENT = 1000;
 
 const formatCurrency = (amount: number) =>
@@ -74,6 +82,7 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
   const [isTeamValid, setIsTeamValid] = useState(true); // Track if team exists
   const [auctionId, setAuctionId] = useState<string | null>(null);
   const [dataError, setDataError] = useState(false);
+  const [bidAudit, setBidAudit] = useState<BidAuditEntry[]>([]);
 
   // Action States
   const [isBidding, setIsBidding] = useState(false);
@@ -84,205 +93,184 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
   const teamsRef = useRef<Team[]>([]);
   const auctionEndTimeRef = useRef<number | null>(null);
   const socketRef = useRef<Socket | null>(null);
+  const auctionIdRef = useRef<string | null>(null);
+  const maxSquadSizeRef = useRef(25);
+  const currentPlayerNameRef = useRef("");
 
   // Helper: Resolve the auction id for this room (scopes all data to one auction)
   const resolveAuctionId = useCallback(async (): Promise<string | null> => {
-    if (auctionId) return auctionId;
+    if (auctionIdRef.current) return auctionIdRef.current;
+    if (auctionId) {
+      auctionIdRef.current = auctionId;
+      return auctionId;
+    }
     const res = await apiFetch(
       `/auctions?roomCode=${encodeURIComponent(roomCode)}`
     );
     if (res.ok) {
       const { auctions } = await res.json();
-      return auctions[0]?.id || null;
+      const id = auctions[0]?.id || null;
+      if (id) auctionIdRef.current = id;
+      return id;
     }
     return null;
   }, [auctionId, roomCode]);
 
-  // Helper: Fetch My Players (if captain) — scoped to THIS auction only
-  const loadMyPlayers = useCallback(async () => {
+  const applyLiveSnapshot = useCallback((live: any) => {
+    setAuctionId(live.id);
+    auctionIdRef.current = live.id;
+
+    if (live.timerEndsAt && live.state === "active") {
+      auctionEndTimeRef.current = new Date(live.timerEndsAt).getTime();
+    } else if (live.state === "active" && live.currentPlayer) {
+      auctionEndTimeRef.current =
+        Date.now() + (live.timerDuration || 30) * 1000;
+    } else {
+      auctionEndTimeRef.current = null;
+      setTimeLeft(0);
+    }
+
+    if (live.currentBid) {
+      setLastBidTeam(live.currentBid.teamId);
+    } else {
+      setLastBidTeam(null);
+    }
+
+    if (live.maxSquadSize) {
+      maxSquadSizeRef.current = live.maxSquadSize;
+    }
+
+    if (role === "admin" && live.recentBids) {
+      setBidAudit(
+        live.recentBids.map((b: any) => ({
+          id: b.id,
+          at: b.createdAt,
+          teamName: b.teamName,
+          amount: b.amount,
+          playerName: b.playerName,
+        }))
+      );
+    }
+
+    const mappedTeams = (live.teams || []).map((t: any) => ({
+      id: t.id,
+      name: t.name,
+      logo: t.logo || "Team",
+      captain: t.captain || "",
+      purse: t.wallet || 0,
+      players: t.players || 0,
+    }));
+    setTeams(mappedTeams);
+    teamsRef.current = mappedTeams;
+
     if (role === "captain" && user?.teamId) {
-      try {
-        const activeAuctionId = await resolveAuctionId();
-        if (!activeAuctionId) return;
-
-        const auctionRes = await apiFetch(`/auctions/${activeAuctionId}`);
-        if (!auctionRes.ok) return;
-        const { auction } = await auctionRes.json();
-
-        const salePrices = new Map<string, number>(
-          (auction.sales || []).map((sale: any) => [
-            String(sale.playerId),
-            sale.price || 0,
-          ])
-        );
-
-        const myPlayers = (auction.players || [])
-          .map((ap: any) => ap.player)
-          .filter((p: any) => p && p.teamId === user.teamId);
-
-        setMyTeamPlayers(
-          myPlayers.map((p: any) => ({
-            id: p.id,
-            name: p.name,
-            photo: p.photo || "",
-            basePrice: p.basePrice || 0,
-            currentBid: salePrices.get(String(p.id)) || p.basePrice || 0,
-            age: p.age || 25,
-            role: p.role || "",
-            batsmanType: p.batsmanType || "",
-            bowlerType: p.bowlerType || "",
-          }))
-        );
-      } catch (err) {
-        console.error("Error loading my players", err);
+      const myTeam = mappedTeams.find((t: Team) => t.id === user.teamId);
+      if (myTeam) {
+        setMyTeamId(myTeam.id);
+        setIsTeamValid(true);
+      } else {
+        setMyTeamId(user.teamId);
+        setIsTeamValid(false);
       }
     }
-  }, [resolveAuctionId, role, user]);
 
-  // Helper: Fetch Teams & Validate My Team — scoped to THIS auction only
-  const loadTeams = useCallback(async () => {
+    if (live.myRoster) {
+      setMyTeamPlayers(
+        live.myRoster.map((p: any) => ({
+          id: p.id,
+          name: p.name,
+          photo: p.photo || "",
+          basePrice: p.soldPrice || 0,
+          currentBid: p.soldPrice || 0,
+          age: p.age || 25,
+          role: p.role || "",
+          batsmanType: p.batsmanType || "",
+          bowlerType: p.bowlerType || "",
+        }))
+      );
+    }
+
+    if (live.currentPlayer) {
+      setDataError(false);
+      currentPlayerNameRef.current = live.currentPlayer.name;
+      setCurrentPlayer((prev) => ({
+        id: live.currentPlayer.id,
+        name: live.currentPlayer.name,
+        photo:
+          live.currentPlayer.photo ||
+          (prev?.id === live.currentPlayer.id ? prev.photo : "") ||
+          "",
+        basePrice: live.currentPlayer.basePrice || 1000,
+        currentBid:
+          live.currentBid?.amount || live.currentPlayer.basePrice || 1000,
+        age: live.currentPlayer.age || 25,
+        role: live.currentPlayer.role || "",
+        batsmanType: live.currentPlayer.batsmanType || "",
+        bowlerType: live.currentPlayer.bowlerType || "",
+      }));
+    } else {
+      setCurrentPlayer(null);
+    }
+  }, [role, user]);
+
+  const warnIfLowPurseReserve = (
+    myTeam: Team,
+    newBid: number,
+    bidIncrement: number
+  ) => {
+    const slotsAfterWin =
+      maxSquadSizeRef.current - myTeam.players - 1;
+    if (slotsAfterWin <= 0) return;
+
+    const remainingPurse = myTeam.purse - newBid;
+    const perSlot = Math.floor(remainingPurse / slotsAfterWin);
+    const minPerSlot = bidIncrement;
+
+    if (remainingPurse <= 0 || perSlot < minPerSlot) {
+      toast({
+        title: "Low purse warning",
+        description: `At ${formatCurrency(newBid)}, you'd have ${formatCurrency(Math.max(0, remainingPurse))} left (~${formatCurrency(Math.max(0, perSlot))} per ${slotsAfterWin} remaining slot). You can still bid.`,
+      });
+    }
+  };
+
+  const syncLiveState = useCallback(async () => {
     try {
       const activeAuctionId = await resolveAuctionId();
-      if (!activeAuctionId) return;
+      if (!activeAuctionId) return null;
 
-      const res = await apiFetch(`/auctions/${activeAuctionId}`);
-      if (!res.ok) return;
-      const { auction } = await res.json();
+      const res = await apiFetch(`/auctions/${activeAuctionId}/live`);
+      if (!res.ok) return null;
 
-      const auctionPlayers = (auction.players || []).map((ap: any) => ap.player);
-      const playerCounts = new Map<string, number>();
-      auctionPlayers.forEach((p: any) => {
-        const tid = p?.teamId;
-        if (tid && tid !== "UNSOLD") {
-          playerCounts.set(tid, (playerCounts.get(tid) || 0) + 1);
-        }
-      });
-
-      const mappedTeams = (auction.teams || [])
-        .map((at: any) => at.team)
-        .filter(Boolean)
-        .map((t: any) => ({
-          id: t.id,
-          name: t.name,
-          logo: t.logo || "Team",
-          captain: t.captain || "",
-          purse: t.wallet || 0,
-          players: playerCounts.get(t.id) || 0,
-        }));
-
-      setTeams(mappedTeams);
-      teamsRef.current = mappedTeams;
-
-      if (role === "captain" && user?.teamId) {
-        const myTeam = mappedTeams.find((t: any) => t.id === user.teamId);
-        if (myTeam) {
-          setMyTeamId(myTeam.id);
-          setIsTeamValid(true);
-        } else {
-          console.warn(
-            "My Team ID not found in current auction teams. Stale session?"
-          );
-          setMyTeamId(user.teamId); // Keep it but mark invalid
-          setIsTeamValid(false);
-        }
-      }
-    } catch (e) {
-      console.error("Error loading teams", e);
-    }
-  }, [resolveAuctionId, role, user]);
-
-  // Helper: Sync Auction State (Clock & Bids)
-  const fetchLatestAuctionState = useCallback(async () => {
-    try {
-      const res = await apiFetch(
-        `/auctions?roomCode=${encodeURIComponent(roomCode)}`
-      );
-      if (!res.ok) return;
-      const { auctions } = await res.json();
-      const a = auctions[0];
-      if (!a) return;
-
-      setAuctionId(a.id);
-
-      // SYNC CLOCK
-      if (a.timerEndsAt && a.state === "active") {
-        auctionEndTimeRef.current = new Date(a.timerEndsAt).getTime();
-      } else if (a.state === "active" && a.currentPlayerId) {
-        auctionEndTimeRef.current = Date.now() + (a.timerDuration || 30) * 1000;
-      } else {
-        auctionEndTimeRef.current = null;
-        setTimeLeft(0);
-      }
-
-      if (a.currentBid) {
-        setLastBidTeam(a.currentBid.teamId);
-      } else {
-        setLastBidTeam(null);
-      }
-
-      // Load current player
-      if (a.currentPlayerId) {
-        const pRes = await apiFetch(`/players/${a.currentPlayerId}`);
-        if (pRes.ok) {
-          const { player } = await pRes.json();
-          setDataError(false);
-          const nextPlayer = {
-            id: player.id,
-            name: player.name,
-            photo: player.photo || "",
-            basePrice: player.basePrice || 1000,
-            currentBid: a.currentBid?.amount || player.basePrice || 1000,
-            age: player.age || 25,
-            role: player.role || "",
-            batsmanType: player.batsmanType || "",
-            bowlerType: player.bowlerType || "",
-          };
-          setCurrentPlayer(nextPlayer);
-          return {
-            player: nextPlayer,
-            lastBidTeam: a.currentBid?.teamId || null,
-          };
-        } else {
-          console.error("Player not found in DB but exists in Auction state.");
-          setDataError(true);
-          const missingPlayer = {
-            id: a.currentPlayerId,
-            name: "Unknown Player (Data Missing)",
-            photo: "",
-            basePrice: 0,
-            currentBid: 0,
-            age: 0,
-            role: "Unknown",
-            batsmanType: "",
-            bowlerType: "",
-          };
-          setCurrentPlayer(missingPlayer);
-          return {
-            player: missingPlayer,
-            lastBidTeam: a.currentBid?.teamId || null,
-          };
-        }
-      } else {
-        setCurrentPlayer(null);
-      }
+      const { live } = await res.json();
+      applyLiveSnapshot(live);
+      return live;
     } catch (err) {
-      console.error("Failed to fetch latest auction state", err);
+      console.error("Failed to sync live auction state", err);
+      return null;
     }
-    return null;
-  }, [roomCode]);
+  }, [applyLiveSnapshot, resolveAuctionId]);
+
+  const loadMyPlayers = useCallback(async () => {
+    await syncLiveState();
+  }, [syncLiveState]);
+
+  const loadTeams = useCallback(async () => {
+    await syncLiveState();
+  }, [syncLiveState]);
+
+  const fetchLatestAuctionState = syncLiveState;
 
   // Initial Load
   useEffect(() => {
     const init = async () => {
-      await loadTeams();
-      await fetchLatestAuctionState();
+      await syncLiveState();
       setCommentary((prev) =>
         [`Joined Room ${roomCode}`, ...prev].slice(0, 10)
       );
     };
     init();
-    loadMyPlayers();
-  }, [roomCode, loadTeams, fetchLatestAuctionState, loadMyPlayers]);
+  }, [roomCode, syncLiveState]);
 
   // Socket Connection
   useEffect(() => {
@@ -314,7 +302,7 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
     s.on("connect", () => {
       setSocketConnected(true);
       s.emit("auction:join", roomCode);
-      fetchLatestAuctionState();
+      syncLiveState();
     });
 
     s.on("disconnect", () => {
@@ -327,13 +315,27 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
         s.auth = { token: freshToken };
       }
       s.emit("auction:join", roomCode);
-      fetchLatestAuctionState();
-      loadTeams();
+      syncLiveState();
     });
 
       s.on("auction:bid_update", (e: any) => {
         const team = teamsRef.current.find((t) => t.id === e.teamId);
         const teamName = team ? team.name : `Team ${e.teamId.substring(0, 4)}`;
+
+        if (role === "admin") {
+          setBidAudit((prev) =>
+            [
+              {
+                id: `${e.at || Date.now()}-${e.teamId}`,
+                at: new Date(e.at || Date.now()).toISOString(),
+                teamName,
+                amount: e.amount,
+                playerName: currentPlayerNameRef.current || "Current player",
+              },
+              ...prev,
+            ].slice(0, 50)
+          );
+        }
 
         setCommentary((prev) =>
           [`Bid: ${formatCurrency(e.amount)} by ${teamName}`, ...prev].slice(
@@ -345,7 +347,11 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
         setCurrentPlayer((p) => (p ? { ...p, currentBid: e.amount } : null));
         setLastBidTeam(e.teamId);
         setHasSkipped(false);
-        auctionEndTimeRef.current = Date.now() + 30000;
+        if (e.endTime) {
+          auctionEndTimeRef.current = e.endTime;
+        } else {
+          auctionEndTimeRef.current = Date.now() + 30000;
+        }
       });
 
       s.on("auction:timer", (e: any) => {
@@ -361,6 +367,7 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
           [`Next Player: ${e.player.name}`, ...prev].slice(0, 10)
         );
         setDataError(false);
+        currentPlayerNameRef.current = e.player.name;
         setCurrentPlayer({
           id: e.player.id,
           name: e.player.name,
@@ -452,7 +459,7 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
         socketRef.current = null;
       }
     };
-  }, [roomCode, loadTeams, loadMyPlayers, onExit, fetchLatestAuctionState]);
+  }, [roomCode, loadTeams, loadMyPlayers, onExit, syncLiveState, toast, role]);
 
   // Local Timer Tick
   useEffect(() => {
@@ -469,52 +476,142 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
   }, [timeLeft]);
 
   // Handlers
+  const placeBidViaHttp = async (
+    newBid: number,
+    playerId: string,
+    activeAuctionId: string
+  ): Promise<boolean> => {
+    const res = await apiFetch(`/auctions/${activeAuctionId}/bid`, {
+      method: "POST",
+      body: JSON.stringify({
+        amount: newBid,
+        teamId: myTeamId,
+        playerId,
+      }),
+    });
+
+    if (res.ok) return true;
+
+    const errData = await res.json().catch(() => ({}));
+    const errorMessage = errData.error || "Unknown error";
+    await syncLiveState();
+
+    if (res.status === 409) {
+      toast({
+        title: "Bid Too Low",
+        description: "Another team placed a higher bid.",
+        variant: "default",
+      });
+    } else {
+      toast({
+        title: "Bid Failed",
+        description: errorMessage,
+        variant: "destructive",
+      });
+    }
+    return false;
+  };
+
   const handleBid = async () => {
     if (!auctionId || !currentPlayer || isBidding || !myTeamId) return;
+
+    const hasCurrentBid = Boolean(lastBidTeam);
+    const newBid = getNextBidAmount(currentPlayer, hasCurrentBid);
+    const myTeam = teamsRef.current.find((t) => t.id === myTeamId);
+
+    // Client-side guards — same rules the server enforces, avoids wasted requests
+    if (timeLeft === 0) {
+      toast({
+        title: "Timer expired",
+        description: "Wait for the next player.",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (myTeam && myTeam.purse < newBid) {
+      toast({
+        title: "Insufficient budget",
+        description: `You need ${formatCurrency(newBid)} but only have ${formatCurrency(myTeam.purse)}.`,
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (myTeam) {
+      warnIfLowPurseReserve(myTeam, newBid, BID_INCREMENT);
+    }
+
     setIsBidding(true);
 
+    const playerId = currentPlayer.id;
+    const prevPlayer = currentPlayer;
+    const prevLastBidTeam = lastBidTeam;
+
+    // Optimistic UI — instant feedback
+    setCurrentPlayer((p) => (p ? { ...p, currentBid: newBid } : null));
+    setLastBidTeam(myTeamId);
+
     try {
-      const latest = await fetchLatestAuctionState();
-      const playerForBid = latest?.player || currentPlayer;
-      const hasCurrentBid = Boolean(latest?.lastBidTeam || lastBidTeam);
-      const newBid = getNextBidAmount(playerForBid, hasCurrentBid);
+      const socket = socketRef.current;
+      if (socket?.connected) {
+        const result = await new Promise<"accepted" | "rejected" | "timeout">(
+          (resolve) => {
+            let settled = false;
+            const finish = (value: "accepted" | "rejected" | "timeout") => {
+              if (settled) return;
+              settled = true;
+              clearTimeout(timeout);
+              socket.off("auction:bid_update", onAccepted);
+              socket.off("auction:bid_rejected", onRejected);
+              resolve(value);
+            };
 
-      const res = await apiFetch(`/auctions/${auctionId}/bid`, {
-        method: "POST",
-        body: JSON.stringify({
-          amount: newBid,
-          teamId: myTeamId,
-          playerId: playerForBid.id,
-        }),
-      });
+            const onAccepted = (e: { teamId: string; amount: number }) => {
+              if (e.teamId === myTeamId && e.amount >= newBid) finish("accepted");
+            };
+            const onRejected = (e: { reason?: string }) => {
+              toast({
+                title: "Bid Failed",
+                description: e.reason || "Your bid could not be placed.",
+                variant: "destructive",
+              });
+              finish("rejected");
+            };
 
-      if (!res.ok) {
-        // Read the actual error message
-        const errData = await res.json();
-        const errorMessage = errData.error || "Unknown error";
+            const timeout = setTimeout(() => finish("timeout"), 2000);
 
-        await fetchLatestAuctionState();
+            socket.on("auction:bid_update", onAccepted);
+            socket.on("auction:bid_rejected", onRejected);
+            socket.emit("auction:bid", {
+              auctionId,
+              roomCode,
+              amount: newBid,
+              teamId: myTeamId,
+              playerId,
+            });
+          }
+        );
 
-        if (res.status === 409) {
-          toast({
-            title: "Bid Too Low",
-            description: "Another team placed a higher bid.",
-            variant: "default",
-          });
-        } else {
-          // Display specific server error (e.g., "Insufficient budget", "Invalid team")
-          toast({
-            title: "Bid Failed",
-            description: errorMessage,
-            variant: "destructive",
-          });
+        if (result === "accepted") return;
+        if (result === "rejected") {
+          setCurrentPlayer(prevPlayer);
+          setLastBidTeam(prevLastBidTeam);
+          return;
         }
+      }
+
+      const httpOk = await placeBidViaHttp(newBid, playerId, auctionId);
+      if (!httpOk) {
+        setCurrentPlayer(prevPlayer);
+        setLastBidTeam(prevLastBidTeam);
       }
     } catch (e) {
       console.error("Bid error", e);
-      await fetchLatestAuctionState();
+      setCurrentPlayer(prevPlayer);
+      setLastBidTeam(prevLastBidTeam);
+      await syncLiveState();
     } finally {
-      setTimeout(() => setIsBidding(false), 500);
+      setTimeout(() => setIsBidding(false), 300);
     }
   };
 
@@ -564,7 +661,7 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
       if (res.ok) {
         toast({ title: "Bid Undone", description: "Bid withdrawn" });
       } else {
-        await fetchLatestAuctionState();
+        await syncLiveState();
         toast({
           title: "Undo Failed",
           description: "Server rejected the undo request.",
@@ -805,6 +902,36 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
                 </div>
               </CardContent>
             </Card>
+
+            {role === "admin" && (
+              <Card className="border-amber-500/50 bg-[#0f1419]">
+                <CardContent className="p-4">
+                  <h3 className="font-bold mb-2 flex items-center gap-2 text-white">
+                    <Gavel className="w-4 h-4 text-amber-400" /> Bid Audit Log
+                  </h3>
+                  <div className="space-y-2 text-xs max-h-48 overflow-y-auto">
+                    {bidAudit.length === 0 ? (
+                      <p className="text-gray-400">No bids recorded yet.</p>
+                    ) : (
+                      bidAudit.map((entry) => (
+                        <div
+                          key={entry.id}
+                          className="border-b border-white/5 pb-2 text-white/90"
+                        >
+                          <p className="font-medium">
+                            {formatCurrency(entry.amount)} — {entry.teamName}
+                          </p>
+                          <p className="text-gray-400">
+                            {entry.playerName} ·{" "}
+                            {new Date(entry.at).toLocaleTimeString("en-IN")}
+                          </p>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
           </div>
 
           <div className="space-y-4">

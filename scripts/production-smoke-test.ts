@@ -133,6 +133,7 @@ async function testAuthProtection() {
     "/api/v1/players",
     "/api/v1/users/admins",
     "/api/v1/invites",
+    "/api/v1/auctions/00000000-0000-0000-0000-000000000000/live",
   ];
 
   for (const route of protectedRoutes) {
@@ -404,6 +405,27 @@ async function testApiRoutingSpeed() {
   }
 }
 
+async function testLiveEndpointRequiresAuth() {
+  console.log("\n[6] Live Endpoint");
+  try {
+    const { res, ms } = await timedFetch(
+      `${BACKEND_URL}/api/v1/auctions/00000000-0000-0000-0000-000000000000/live`
+    );
+    record({
+      name: "Live endpoint requires auth",
+      status: res.status === 401 ? "PASS" : "FAIL",
+      ms,
+      detail: `status=${res.status}`,
+    });
+  } catch (err: any) {
+    record({
+      name: "Live endpoint requires auth",
+      status: "FAIL",
+      detail: err.message,
+    });
+  }
+}
+
 async function main() {
   console.log("═══════════════════════════════════════════════");
   console.log("  BidArena Production Smoke Test");
@@ -422,6 +444,7 @@ async function main() {
   await testPollingFallback();
   await testFrontend();
   await testApiRoutingSpeed();
+  await testLiveEndpointRequiresAuth();
 
   const pass = results.filter((r) => r.status === "PASS").length;
   const warn = results.filter((r) => r.status === "WARN").length;

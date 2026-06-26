@@ -7,6 +7,7 @@ import {
   placeBid,
   startAuction,
   getAuction,
+  getAuctionLive,
   getAuctionReport,
   pauseAuction,
   resumeAuction,
@@ -19,6 +20,7 @@ import {
 const router = Router();
 
 router.get("/", requireAuth, listAuctions);
+router.get("/:id/live", requireAuth, getAuctionLive);
 router.get("/:id", requireAuth, getAuction);
 router.post("/", requireAuth, requireRoles(["admin"]), createAuction);
 router.post("/:id/start", requireAuth, requireRoles(["admin"]), startAuction);

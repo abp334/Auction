@@ -192,6 +192,238 @@ export async function getAuction(
   return res.status(StatusCodes.OK).json({ auction: result });
 }
 
+/** Lightweight snapshot for live auction room — minimal joins, photos for current player + roster only. */
+export async function getAuctionLive(
+  req: Request & { user?: { id: string; role: string } },
+  res: Response
+) {
+  const { id } = req.params;
+
+  if (req.user && (req.user.role === "captain" || req.user.role === "player")) {
+    const dbUser = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      select: { auctionId: true, teamId: true },
+    });
+    if (dbUser?.auctionId !== id) {
+      return res
+        .status(StatusCodes.FORBIDDEN)
+        .json({ error: "You are not part of this auction" });
+    }
+  }
+
+  const auction = await prisma.auction.findUnique({
+    where: { id },
+    select: {
+      id: true,
+      name: true,
+      roomCode: true,
+      state: true,
+      currentPlayerId: true,
+      currentBidAmount: true,
+      currentBidTeamId: true,
+      currentBidAt: true,
+      timerEndsAt: true,
+      timerDuration: true,
+      bidIncrement: true,
+      maxSquadSize: true,
+      teams: {
+        select: {
+          team: {
+            select: {
+              id: true,
+              name: true,
+              logo: true,
+              captain: true,
+              wallet: true,
+            },
+          },
+        },
+      },
+      sales: {
+        select: {
+          playerId: true,
+          teamId: true,
+          price: true,
+          player: { select: { name: true } },
+          team: { select: { name: true } },
+        },
+      },
+      unsoldPlayers: { select: { playerId: true } },
+      players: {
+        select: {
+          player: {
+            select: {
+              id: true,
+              teamId: true,
+            },
+          },
+        },
+      },
+    },
+  });
+
+  if (!auction)
+    return res
+      .status(StatusCodes.NOT_FOUND)
+      .json({ error: "Auction not found" });
+
+  let currentPlayer = null;
+  if (auction.currentPlayerId) {
+    const player = await prisma.player.findUnique({
+      where: { id: auction.currentPlayerId },
+      select: {
+        id: true,
+        name: true,
+        role: true,
+        basePrice: true,
+        age: true,
+        batsmanType: true,
+        bowlerType: true,
+        photo: true,
+      },
+    });
+    if (player) {
+      currentPlayer = {
+        id: player.id,
+        name: player.name,
+        role: player.role || "",
+        basePrice: player.basePrice || 1000,
+        age: player.age || 25,
+        batsmanType: player.batsmanType || "",
+        bowlerType: player.bowlerType || "",
+        photo: player.photo || "",
+      };
+    }
+  }
+
+  const playerCounts = new Map<string, number>();
+  for (const ap of auction.players) {
+    const tid = ap.player.teamId;
+    if (tid) playerCounts.set(tid, (playerCounts.get(tid) || 0) + 1);
+  }
+
+  const teams = auction.teams.map((at) => ({
+    id: at.team.id,
+    name: at.team.name,
+    logo: at.team.logo || "Team",
+    captain: at.team.captain || "",
+    wallet: at.team.wallet,
+    players: playerCounts.get(at.team.id) || 0,
+  }));
+
+  let myRoster: Array<{
+    id: string;
+    name: string;
+    role: string;
+    soldPrice: number;
+    age: number;
+    batsmanType: string;
+    bowlerType: string;
+    photo: string;
+  }> = [];
+
+  if (req.user?.role === "captain") {
+    const dbUser = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      select: { teamId: true },
+    });
+    if (dbUser?.teamId) {
+      const salePrices = new Map(
+        auction.sales.map((s) => [s.playerId, s.price])
+      );
+      const rosterPlayers = await prisma.player.findMany({
+        where: {
+          teamId: dbUser.teamId,
+          id: { in: auction.players.map((ap) => ap.player.id) },
+        },
+        select: {
+          id: true,
+          name: true,
+          role: true,
+          basePrice: true,
+          age: true,
+          batsmanType: true,
+          bowlerType: true,
+          photo: true,
+        },
+      });
+      myRoster = rosterPlayers.map((p) => ({
+        id: p.id,
+        name: p.name,
+        role: p.role || "",
+        soldPrice: salePrices.get(p.id) || p.basePrice || 0,
+        age: p.age || 25,
+        batsmanType: p.batsmanType || "",
+        bowlerType: p.bowlerType || "",
+        photo: p.photo || "",
+      }));
+    }
+  }
+
+  let recentBids: Array<{
+    id: string;
+    amount: number;
+    createdAt: Date;
+    teamName: string;
+    playerName: string;
+  }> = [];
+
+  if (req.user?.role === "admin") {
+    const bids = await prisma.bid.findMany({
+      where: { auctionId: id },
+      orderBy: { createdAt: "desc" },
+      take: 40,
+      select: {
+        id: true,
+        amount: true,
+        createdAt: true,
+        team: { select: { name: true } },
+        player: { select: { name: true } },
+      },
+    });
+    recentBids = bids.map((b) => ({
+      id: b.id,
+      amount: b.amount,
+      createdAt: b.createdAt,
+      teamName: b.team.name,
+      playerName: b.player.name,
+    }));
+  }
+
+  return res.status(StatusCodes.OK).json({
+    live: {
+      id: auction.id,
+      name: auction.name,
+      roomCode: auction.roomCode,
+      state: auction.state,
+      timerEndsAt: auction.timerEndsAt,
+      timerDuration: auction.timerDuration,
+      bidIncrement: auction.bidIncrement,
+      maxSquadSize: auction.maxSquadSize,
+      currentBid: auction.currentBidAmount
+        ? {
+            amount: auction.currentBidAmount,
+            teamId: auction.currentBidTeamId,
+            at: auction.currentBidAt,
+          }
+        : undefined,
+      currentPlayer,
+      teams,
+      soldCount: auction.sales.length,
+      unsoldCount: auction.unsoldPlayers.length,
+      sales: auction.sales.map((s) => ({
+        playerId: s.playerId,
+        playerName: s.player.name,
+        teamId: s.teamId,
+        teamName: s.team.name,
+        price: s.price,
+      })),
+      myRoster,
+      recentBids,
+    },
+  });
+}
+
 export async function createAuction(
   req: Request & { user?: { id: string } },
   res: Response
