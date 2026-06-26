@@ -8,6 +8,7 @@
     "dev": "tsx watch src/index.ts",
     "build": "npx prisma generate && tsc -p tsconfig.json",
     "start": "node dist/index.js",
+    "test:smoke": "tsx ../scripts/production-smoke-test.ts",
     "db:migrate": "npx prisma migrate dev",
     "db:push": "npx prisma db push",
     "db:studio": "npx prisma studio",

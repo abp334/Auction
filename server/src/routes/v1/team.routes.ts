@@ -10,9 +10,8 @@ import {
 
 const router = Router();
 
-// Public endpoints for viewing teams (needed for captain signup)
-router.get("/", listTeams);
-router.get("/:id", getTeam);
+router.get("/", requireAuth, listTeams);
+router.get("/:id", requireAuth, getTeam);
 
 // Admin-only mutations
 router.post("/", requireAuth, requireRoles(["admin"]), createTeam);
