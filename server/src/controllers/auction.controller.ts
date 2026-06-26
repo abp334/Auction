@@ -552,7 +552,57 @@ async function runAuctionImport(
     roomCode = generateRoomCode();
   }
 
-  return prisma.$transaction(async (tx) => {
+  const captainEmailSet = new Set(
+    value.teams
+      .map((t) => normalizeEmail(t.captainEmail || ""))
+      .filter(Boolean)
+  );
+
+  const participantEmails = [
+    ...value.teams
+      .map((t) => normalizeEmail(t.captainEmail || ""))
+      .filter(Boolean),
+    ...value.players
+      .map((p) => normalizeEmail(p.email || ""))
+      .filter((email) => email && !captainEmailSet.has(email)),
+  ];
+
+  const existingUsers = participantEmails.length
+    ? await prisma.user.findMany({
+        where: { email: { in: participantEmails } },
+        select: { id: true, email: true, role: true },
+      })
+    : [];
+
+  const existingByEmail = new Map(
+    existingUsers.map((u) => [normalizeEmail(u.email), u])
+  );
+
+  // bcrypt is slow — never run it inside an interactive transaction.
+  const passwordHashes = new Map<string, string>();
+  await Promise.all([
+    ...value.teams.map(async (t) => {
+      const email = normalizeEmail(t.captainEmail || "");
+      if (!email || existingByEmail.has(email)) return;
+      passwordHashes.set(
+        email,
+        await hashPassword(buildCaptainPassword(t.name))
+      );
+    }),
+    ...value.players.map(async (p) => {
+      const email = normalizeEmail(p.email || "");
+      if (!email || captainEmailSet.has(email) || existingByEmail.has(email)) {
+        return;
+      }
+      passwordHashes.set(
+        email,
+        await hashPassword(buildPlayerPassword(p.name))
+      );
+    }),
+  ]);
+
+  return prisma.$transaction(
+    async (tx) => {
     const createdTeams = await Promise.all(
       value.teams.map((t) =>
         tx.team.create({
@@ -603,14 +653,14 @@ async function runAuctionImport(
       const newTeam = createdTeams[i];
 
       if (inputTeam.captainEmail) {
-        let user = await tx.user.findUnique({
-          where: { email: inputTeam.captainEmail },
-        });
+        const email = normalizeEmail(inputTeam.captainEmail);
+        let user = existingByEmail.get(email);
 
         if (!user) {
-          const passwordHash = await hashPassword(
-            buildCaptainPassword(inputTeam.name)
-          );
+          const passwordHash = passwordHashes.get(email);
+          if (!passwordHash) {
+            throw new Error(`Missing password hash for captain ${email}`);
+          }
           user = await tx.user.create({
             data: {
               name: inputTeam.captain || "Captain",
@@ -623,6 +673,7 @@ async function runAuctionImport(
               mustChangePassword: true,
             },
           });
+          existingByEmail.set(email, user);
         } else {
           user = await tx.user.update({
             where: { id: user.id },
@@ -632,6 +683,7 @@ async function runAuctionImport(
               auctionId: auction.id,
             },
           });
+          existingByEmail.set(email, user);
         }
 
         await tx.team.updateMany({
@@ -641,33 +693,32 @@ async function runAuctionImport(
 
         await tx.team.update({
           where: { id: newTeam.id },
-          data: { captainId: user.id, captain: user.name },
+          data: {
+            captainId: user.id,
+            captain: inputTeam.captain || "Captain",
+          },
         });
         linkedCaptains++;
       }
     }
 
-    const captainEmails = new Set(
-      value.teams
-        .map((t) => normalizeEmail(t.captainEmail || ""))
-        .filter(Boolean)
-    );
     let linkedPlayers = 0;
     for (let i = 0; i < value.players.length; i++) {
       const inputPlayer = value.players[i];
-      const email = (inputPlayer.email || "").trim();
+      const email = normalizeEmail(inputPlayer.email || "");
       if (!email) continue;
-      if (captainEmails.has(normalizeEmail(email))) continue;
+      if (captainEmailSet.has(email)) continue;
 
-      const existing = await tx.user.findUnique({ where: { email } });
+      const existing = existingByEmail.get(email);
       if (!existing) {
-        const passwordHash = await hashPassword(
-          buildPlayerPassword(inputPlayer.name)
-        );
-        await tx.user.create({
+        const passwordHash = passwordHashes.get(email);
+        if (!passwordHash) {
+          throw new Error(`Missing password hash for player ${email}`);
+        }
+        const created = await tx.user.create({
           data: {
             name: inputPlayer.name,
-            email,
+            email: inputPlayer.email!,
             passwordHash,
             role: "player",
             auctionId: auction.id,
@@ -675,6 +726,7 @@ async function runAuctionImport(
             mustChangePassword: true,
           },
         });
+        existingByEmail.set(email, created);
         linkedPlayers++;
       } else {
         await tx.user.update({
@@ -711,7 +763,9 @@ async function runAuctionImport(
       linkedCaptains,
       linkedPlayers,
     };
-  });
+  },
+    { maxWait: 10_000, timeout: 60_000 }
+  );
 }
 
 export async function createAuction(
