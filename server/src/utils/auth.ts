@@ -37,6 +37,11 @@ export async function hashPassword(plain: string): Promise<string> {
   return bcrypt.hash(plain, 12);
 }
 
+/** Sandbox-only — fast enough for one-click test seed on Render. */
+export async function hashTestPassword(plain: string): Promise<string> {
+  return bcrypt.hash(plain, 6);
+}
+
 export async function comparePassword(
   plain: string,
   hash: string

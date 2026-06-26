@@ -172,12 +172,21 @@ const AuctionTab = () => {
   const [teamForm, setTeamForm] = useState({ ...emptyTeamForm });
   const [playerForm, setPlayerForm] = useState({ ...emptyPlayerForm });
 
-  // Check for active auction on load
+  // Check for active auction on load (+ when test seed completes)
   useEffect(() => {
-    const checkActive = async () => {
+    const checkActive = async (event?: Event) => {
       const res = await apiFetch("/auctions");
       if (res.ok) {
         const { auctions } = await res.json();
+        const preferredId = (event as CustomEvent<{ auctionId?: string }>)
+          ?.detail?.auctionId;
+        if (preferredId) {
+          const chosen = auctions.find((a: any) => a.id === preferredId);
+          if (chosen) {
+            setCurrentAuction(chosen);
+            return;
+          }
+        }
         const active = auctions.find(
           (a: any) =>
             a.state === "active" || a.state === "draft" || a.state === "paused"
@@ -186,6 +195,12 @@ const AuctionTab = () => {
       }
     };
     checkActive();
+    const handler = (e: Event) => {
+      void checkActive(e);
+    };
+    window.addEventListener("bidarena:auctions-changed", handler);
+    return () =>
+      window.removeEventListener("bidarena:auctions-changed", handler);
   }, []);
 
   // Poll lightweight live snapshot when auction is running (full fetch only on setup)

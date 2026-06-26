@@ -3,7 +3,7 @@ import { StatusCodes } from "http-status-codes";
 import Joi from "joi";
 import prisma from "../utils/db.js";
 import { getIO } from "../sockets/io.js";
-import { hashPassword } from "../utils/auth.js";
+import { hashPassword, hashTestPassword } from "../utils/auth.js";
 import { logger } from "../utils/logger.js";
 import {
   startAuctionTimer,
@@ -579,25 +579,20 @@ async function runAuctionImport(
   );
 
   // bcrypt is slow — never run it inside an interactive transaction.
+  const hashFn = isTest ? hashTestPassword : hashPassword;
   const passwordHashes = new Map<string, string>();
   await Promise.all([
     ...value.teams.map(async (t) => {
       const email = normalizeEmail(t.captainEmail || "");
       if (!email || existingByEmail.has(email)) return;
-      passwordHashes.set(
-        email,
-        await hashPassword(buildCaptainPassword(t.name))
-      );
+      passwordHashes.set(email, await hashFn(buildCaptainPassword(t.name)));
     }),
     ...value.players.map(async (p) => {
       const email = normalizeEmail(p.email || "");
       if (!email || captainEmailSet.has(email) || existingByEmail.has(email)) {
         return;
       }
-      passwordHashes.set(
-        email,
-        await hashPassword(buildPlayerPassword(p.name))
-      );
+      passwordHashes.set(email, await hashFn(buildPlayerPassword(p.name)));
     }),
   ]);
 

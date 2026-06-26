@@ -17,54 +17,54 @@ export async function wipeAllTestAuctions(): Promise<number> {
     },
   });
 
-  for (const auction of testAuctions) {
-    await wipeTestAuctionById(auction.id, {
-      teamIds: auction.teams.map((t) => t.teamId),
-      playerIds: auction.players.map((p) => p.playerId),
-    });
+  if (!testAuctions.length) return 0;
+
+  const auctionIds = testAuctions.map((a) => a.id);
+  const teamIds = [
+    ...new Set(testAuctions.flatMap((a) => a.teams.map((t) => t.teamId))),
+  ];
+  const playerIds = [
+    ...new Set(testAuctions.flatMap((a) => a.players.map((p) => p.playerId))),
+  ];
+
+  for (const id of auctionIds) stopAuctionTimer(id);
+
+  try {
+    await prisma.$transaction(
+      async (tx) => {
+        await tx.auction.updateMany({
+          where: { id: { in: auctionIds } },
+          data: {
+            currentPlayerId: null,
+            currentBidAmount: null,
+            currentBidTeamId: null,
+            currentBidAt: null,
+          },
+        });
+
+        await tx.user.updateMany({
+          where: {
+            auctionId: { in: auctionIds },
+            email: { endsWith: TEST_EMAIL_SUFFIX },
+          },
+          data: { auctionId: null, teamId: null },
+        });
+
+        if (playerIds.length > 0) {
+          await tx.player.deleteMany({ where: { id: { in: playerIds } } });
+        }
+        if (teamIds.length > 0) {
+          await tx.team.deleteMany({ where: { id: { in: teamIds } } });
+        }
+
+        await tx.auction.deleteMany({ where: { id: { in: auctionIds } } });
+      },
+      { timeout: 60_000 }
+    );
+  } catch (err) {
+    logger.error({ err, auctionIds }, "Failed to wipe test auctions");
+    throw err;
   }
 
   return testAuctions.length;
-}
-
-async function wipeTestAuctionById(
-  auctionId: string,
-  ids: { teamIds: string[]; playerIds: string[] }
-) {
-  stopAuctionTimer(auctionId);
-
-  try {
-    await prisma.$transaction(async (tx) => {
-      await tx.auction.update({
-        where: { id: auctionId },
-        data: {
-          currentPlayerId: null,
-          currentBidAmount: null,
-          currentBidTeamId: null,
-          currentBidAt: null,
-        },
-      });
-
-      // Reuse test logins on the next seed — do not delete @test.clashbid accounts.
-      await tx.user.updateMany({
-        where: {
-          auctionId,
-          email: { endsWith: TEST_EMAIL_SUFFIX },
-        },
-        data: { auctionId: null, teamId: null },
-      });
-
-      if (ids.playerIds.length > 0) {
-        await tx.player.deleteMany({ where: { id: { in: ids.playerIds } } });
-      }
-      if (ids.teamIds.length > 0) {
-        await tx.team.deleteMany({ where: { id: { in: ids.teamIds } } });
-      }
-
-      await tx.auction.delete({ where: { id: auctionId } });
-    });
-  } catch (err) {
-    logger.error({ err, auctionId }, "Failed to wipe test auction");
-    throw err;
-  }
 }

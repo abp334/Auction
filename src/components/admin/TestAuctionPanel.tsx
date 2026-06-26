@@ -21,6 +21,9 @@ type SeedResult = {
   credentials: TestCredentials;
 };
 
+const secondaryBtnClass =
+  "border-amber-500/50 bg-[#0f1419] text-amber-400 hover:bg-amber-500/10 hover:text-amber-300 font-semibold";
+
 const TestAuctionPanel = () => {
   const { toast } = useToast();
   const [loading, setLoading] = useState(false);
@@ -34,6 +37,14 @@ const TestAuctionPanel = () => {
       .finally(() => setChecking(false));
   }, []);
 
+  const refreshAuctionList = () => {
+    window.dispatchEvent(
+      new CustomEvent("bidarena:auctions-changed", {
+        detail: { auctionId: result?.auction.id },
+      })
+    );
+  };
+
   const handleSeed = async () => {
     setLoading(true);
     try {
@@ -41,9 +52,14 @@ const TestAuctionPanel = () => {
       if (res.ok) {
         const data = await res.json();
         setResult(data);
+        window.dispatchEvent(
+          new CustomEvent("bidarena:auctions-changed", {
+            detail: { auctionId: data.auction.id },
+          })
+        );
         toast({
           title: "Test auction created",
-          description: `Room code: ${data.auction.roomCode}. Refresh to open it in the control panel.`,
+          description: `Room code: ${data.auction.roomCode}. Select it in the control panel above.`,
         });
       } else {
         const err = await res.json().catch(() => ({}));
@@ -89,8 +105,8 @@ const TestAuctionPanel = () => {
         </div>
         <CardDescription className="text-gray-400">
           One click: 4 teams, 12 players, all logins use @test.clashbid only.
-          Sandbox data is hidden from regular admins and never mixed into production lists.
-          Re-running replaces the previous test auction.
+          Sandbox data is hidden from regular admins. Re-running replaces the
+          previous test auction.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -100,23 +116,29 @@ const TestAuctionPanel = () => {
             disabled={loading}
             className="bg-amber-500 text-black font-bold hover:bg-amber-400"
           >
-            {loading ? "Creating..." : "Create Test Auction"}
+            {loading ? "Creating…" : "Create Test Auction"}
           </Button>
           {result && (
             <>
               <Button
                 variant="outline"
                 onClick={copyAll}
-                className="border-white/20 text-white"
+                className={secondaryBtnClass}
               >
                 <Copy className="w-4 h-4 mr-2" /> Copy All Logins
               </Button>
               <Button
                 variant="outline"
-                onClick={() => window.location.reload()}
-                className="border-white/20 text-white"
+                onClick={() =>
+                  window.dispatchEvent(
+                    new CustomEvent("bidarena:auctions-changed", {
+                      detail: { auctionId: result.auction.id },
+                    })
+                  )
+                }
+                className={secondaryBtnClass}
               >
-                <RefreshCw className="w-4 h-4 mr-2" /> Refresh Dashboard
+                <RefreshCw className="w-4 h-4 mr-2" /> Load in Panel
               </Button>
             </>
           )}
@@ -129,7 +151,8 @@ const TestAuctionPanel = () => {
                 Room: {result.auction.roomCode}
               </p>
               <p className="text-gray-400 text-xs mt-1">
-                State: {result.auction.state} — refresh, then click Start Auction
+                State: {result.auction.state} — click Load in Panel, then Start
+                Auction
               </p>
             </div>
 
