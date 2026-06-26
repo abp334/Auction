@@ -117,6 +117,7 @@ model Auction {
   timerEndsAt      DateTime?
   bidIncrement     Int          @default(1000)
   maxSquadSize     Int          @default(25)
+  isTest           Boolean      @default(false)
   createdById      String?
   createdBy        User?        @relation("AuctionCreator", fields: [createdById], references: [id], onDelete: SetNull)
   createdAt        DateTime     @default(now())

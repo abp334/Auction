@@ -2,6 +2,7 @@ import type { NextFunction, Request, Response } from "express";
 import { StatusCodes } from "http-status-codes";
 import { verifyAccessToken } from "../utils/auth.js";
 import prisma from "../utils/db.js";
+import { isSuperAdminEmail } from "../utils/superAdmin.js";
 
 export function requireAuth(
   req: Request & { user?: { id: string; role: string } },
@@ -56,13 +57,8 @@ export function requireSuperAdmin() {
         .status(StatusCodes.UNAUTHORIZED)
         .json({ error: "Unauthorized" });
 
-    const superAdminEmails = (process.env.SUPER_ADMIN_EMAILS || "")
-      .split(",")
-      .map((e) => e.trim().toLowerCase())
-      .filter(Boolean);
-
     const user = await prisma.user.findUnique({ where: { id: req.user.id } });
-    if (!user || !superAdminEmails.includes(user.email.toLowerCase())) {
+    if (!user || !isSuperAdminEmail(user.email)) {
       return res
         .status(StatusCodes.FORBIDDEN)
         .json({ error: "Only the platform owner can perform this action." });

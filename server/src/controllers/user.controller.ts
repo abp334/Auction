@@ -1,6 +1,8 @@
 import { StatusCodes } from "http-status-codes";
 import type { Request, Response } from "express";
 import prisma from "../utils/db.js";
+import { isSuperAdminUser } from "../utils/superAdmin.js";
+import { isTestParticipantEmail } from "../utils/testAuctionSeed.js";
 
 export async function listUsers(req: Request, res: Response) {
   const { search } = req.query as { search?: string };
@@ -40,7 +42,13 @@ export async function listAdminUsers(req: Request, res: Response) {
   return res.status(StatusCodes.OK).json({ users });
 }
 
-export async function listCaptainUsers(req: Request, res: Response) {
+export async function listCaptainUsers(
+  req: Request & { user?: { id: string; role: string } },
+  res: Response
+) {
+  const superAdmin =
+    req.user?.id ? await isSuperAdminUser(req.user.id) : false;
+
   const users = await prisma.user.findMany({
     where: { role: "captain" },
     select: {
@@ -51,12 +59,16 @@ export async function listCaptainUsers(req: Request, res: Response) {
       emailVerified: true,
       createdAt: true,
       team: { select: { id: true, name: true } },
-      auction: { select: { id: true, name: true, roomCode: true, state: true } },
+      auction: { select: { id: true, name: true, roomCode: true, state: true, isTest: true } },
     },
     orderBy: { createdAt: "desc" },
   });
 
-  return res.status(StatusCodes.OK).json({ users });
+  const visible = superAdmin
+    ? users
+    : users.filter((u) => !isTestParticipantEmail(u.email));
+
+  return res.status(StatusCodes.OK).json({ users: visible });
 }
 
 export async function deleteUser(

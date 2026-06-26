@@ -13,6 +13,13 @@ import {
   moveToNextPlayer,
   auctionPlayerQueues,
 } from "../utils/timer.js";
+import {
+  buildTestAuctionPayload,
+  buildTestCredentials,
+  isTestParticipantEmail,
+} from "../utils/testAuctionSeed.js";
+import { isSuperAdminUser } from "../utils/superAdmin.js";
+import { wipeAllTestAuctions } from "../utils/testAuctionCleanup.js";
 
 const BID_INCREMENT = 1000;
 
@@ -126,12 +133,55 @@ const currentPlayerSchema = Joi.object({
 
 const pendingBids = new Map<string, Promise<any>>();
 
+/** Production admins must not see or mutate sandbox auctions. */
+async function blockTestAuctionForNonSuperAdmin(
+  req: Request & { user?: { id: string; role: string } },
+  res: Response,
+  auctionId: string
+): Promise<boolean> {
+  if (!req.user || req.user.role !== "admin") return false;
+
+  const [auction, superAdmin] = await Promise.all([
+    prisma.auction.findUnique({
+      where: { id: auctionId },
+      select: { isTest: true, name: true },
+    }),
+    isSuperAdminUser(req.user.id),
+  ]);
+
+  const isSandbox =
+    auction?.isTest === true || auction?.name === "ClashBid Test Auction";
+
+  if (isSandbox && !superAdmin) {
+    res
+      .status(StatusCodes.NOT_FOUND)
+      .json({ error: "Auction not found" });
+    return true;
+  }
+
+  return false;
+}
+
 export async function listAuctions(
   req: Request & { user?: { id: string; role: string } },
   res: Response
 ) {
   const { roomCode } = req.query as { roomCode?: string };
-  const where = roomCode ? { roomCode } : {};
+  const superAdmin =
+    req.user?.role === "admin" && req.user.id
+      ? await isSuperAdminUser(req.user.id)
+      : false;
+
+  const where: {
+    roomCode?: string;
+    isTest?: boolean;
+    NOT?: { name: string };
+  } = {};
+  if (roomCode) where.roomCode = roomCode;
+  if (req.user?.role === "admin" && !superAdmin) {
+    where.isTest = false;
+    where.NOT = { name: "ClashBid Test Auction" };
+  }
 
   let auctions = await prisma.auction.findMany({
     where,
@@ -140,6 +190,7 @@ export async function listAuctions(
       name: true,
       roomCode: true,
       state: true,
+      isTest: true,
       currentPlayerId: true,
       currentBidAmount: true,
       currentBidTeamId: true,
@@ -179,6 +230,8 @@ export async function getAuction(
   res: Response
 ) {
   const { id } = req.params;
+
+  if (await blockTestAuctionForNonSuperAdmin(req, res, id)) return;
 
   // Captains and players may only access the auction they were added to.
   if (req.user && (req.user.role === "captain" || req.user.role === "player")) {
@@ -235,6 +288,8 @@ export async function getAuctionLive(
   res: Response
 ) {
   const { id } = req.params;
+
+  if (await blockTestAuctionForNonSuperAdmin(req, res, id)) return;
 
   if (req.user && (req.user.role === "captain" || req.user.role === "player")) {
     const dbUser = await prisma.user.findUnique({
@@ -461,6 +516,204 @@ export async function getAuctionLive(
   });
 }
 
+type AuctionImportInput = {
+  name: string;
+  teams: Array<{
+    name: string;
+    wallet?: number;
+    logo?: string | null;
+    owner?: string | null;
+    code?: string | number | null;
+    captain?: string | null;
+    captainEmail?: string | null;
+  }>;
+  players: Array<{
+    name: string;
+    role: string;
+    basePrice: number;
+    photo?: string | null;
+    age?: number | null;
+    batsmanType?: string | null;
+    bowlerType?: string | null;
+    mobile?: string | number | null;
+    email?: string | null;
+  }>;
+};
+
+async function runAuctionImport(
+  userId: string | undefined,
+  value: AuctionImportInput,
+  isTest = false
+) {
+  let roomCode = generateRoomCode();
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const exists = await prisma.auction.findUnique({ where: { roomCode } });
+    if (!exists) break;
+    roomCode = generateRoomCode();
+  }
+
+  return prisma.$transaction(async (tx) => {
+    const createdTeams = await Promise.all(
+      value.teams.map((t) =>
+        tx.team.create({
+          data: {
+            name: t.name,
+            wallet: t.wallet || 1000000,
+            logo: t.logo || null,
+            owner: t.owner || null,
+            mobile: t.code ? String(t.code) : null,
+            captain: t.captain || null,
+          },
+        })
+      )
+    );
+
+    const createdPlayers = await Promise.all(
+      value.players.map((p) =>
+        tx.player.create({
+          data: {
+            name: p.name,
+            role: p.role,
+            basePrice: p.basePrice,
+            photo: p.photo || null,
+            age: p.age || null,
+            batsmanType: p.batsmanType || null,
+            bowlerType: p.bowlerType || null,
+            mobile: p.mobile ? String(p.mobile) : null,
+            email: p.email || null,
+            teamId: null,
+          },
+        })
+      )
+    );
+
+    const auction = await tx.auction.create({
+      data: {
+        name: value.name,
+        roomCode,
+        state: "draft",
+        isTest,
+        createdById: userId || null,
+      },
+    });
+
+    let linkedCaptains = 0;
+    for (let i = 0; i < value.teams.length; i++) {
+      const inputTeam = value.teams[i];
+      const newTeam = createdTeams[i];
+
+      if (inputTeam.captainEmail) {
+        let user = await tx.user.findUnique({
+          where: { email: inputTeam.captainEmail },
+        });
+
+        if (!user) {
+          const passwordHash = await hashPassword(
+            buildCaptainPassword(inputTeam.name)
+          );
+          user = await tx.user.create({
+            data: {
+              name: inputTeam.captain || "Captain",
+              email: inputTeam.captainEmail,
+              passwordHash,
+              role: "captain",
+              teamId: newTeam.id,
+              auctionId: auction.id,
+              emailVerified: true,
+              mustChangePassword: true,
+            },
+          });
+        } else {
+          user = await tx.user.update({
+            where: { id: user.id },
+            data: {
+              teamId: newTeam.id,
+              role: "captain",
+              auctionId: auction.id,
+            },
+          });
+        }
+
+        await tx.team.updateMany({
+          where: { captainId: user.id, NOT: { id: newTeam.id } },
+          data: { captainId: null },
+        });
+
+        await tx.team.update({
+          where: { id: newTeam.id },
+          data: { captainId: user.id, captain: user.name },
+        });
+        linkedCaptains++;
+      }
+    }
+
+    const captainEmails = new Set(
+      value.teams
+        .map((t) => normalizeEmail(t.captainEmail || ""))
+        .filter(Boolean)
+    );
+    let linkedPlayers = 0;
+    for (let i = 0; i < value.players.length; i++) {
+      const inputPlayer = value.players[i];
+      const email = (inputPlayer.email || "").trim();
+      if (!email) continue;
+      if (captainEmails.has(normalizeEmail(email))) continue;
+
+      const existing = await tx.user.findUnique({ where: { email } });
+      if (!existing) {
+        const passwordHash = await hashPassword(
+          buildPlayerPassword(inputPlayer.name)
+        );
+        await tx.user.create({
+          data: {
+            name: inputPlayer.name,
+            email,
+            passwordHash,
+            role: "player",
+            auctionId: auction.id,
+            emailVerified: true,
+            mustChangePassword: true,
+          },
+        });
+        linkedPlayers++;
+      } else {
+        await tx.user.update({
+          where: { id: existing.id },
+          data: {
+            auctionId: auction.id,
+            role: existing.role === "player" ? "player" : existing.role,
+          },
+        });
+        linkedPlayers++;
+      }
+    }
+
+    await Promise.all(
+      createdTeams.map((t) =>
+        tx.auctionTeam.create({
+          data: { auctionId: auction.id, teamId: t.id },
+        })
+      )
+    );
+
+    await Promise.all(
+      createdPlayers.map((p, idx) =>
+        tx.auctionPlayer.create({
+          data: { auctionId: auction.id, playerId: p.id, sortOrder: idx },
+        })
+      )
+    );
+
+    return {
+      auction,
+      teamCount: createdTeams.length,
+      playerCount: createdPlayers.length,
+      linkedCaptains,
+      linkedPlayers,
+    };
+  });
+}
+
 export async function createAuction(
   req: Request & { user?: { id: string } },
   res: Response
@@ -475,184 +728,7 @@ export async function createAuction(
   }
 
   try {
-    let roomCode = generateRoomCode();
-    for (let attempt = 0; attempt < 5; attempt++) {
-      const exists = await prisma.auction.findUnique({
-        where: { roomCode },
-      });
-      if (!exists) break;
-      roomCode = generateRoomCode();
-    }
-
-    const result = await prisma.$transaction(async (tx) => {
-      const createdTeams = await Promise.all(
-        value.teams.map((t: any) =>
-          tx.team.create({
-            data: {
-              name: t.name,
-              wallet: t.wallet || 1000000,
-              logo: t.logo || null,
-              owner: t.owner || null,
-              mobile: t.code ? String(t.code) : null,
-              captain: t.captain || null,
-            },
-          })
-        )
-      );
-
-      const createdPlayers = await Promise.all(
-        value.players.map((p: any) =>
-          tx.player.create({
-            data: {
-              name: p.name,
-              role: p.role,
-              basePrice: p.basePrice,
-              photo: p.photo || null,
-              age: p.age || null,
-              batsmanType: p.batsmanType || null,
-              bowlerType: p.bowlerType || null,
-              mobile: p.mobile ? String(p.mobile) : null,
-              email: p.email || null,
-              teamId: null,
-            },
-          })
-        )
-      );
-
-      // Create the auction first so participant accounts can be scoped to it.
-      const auction = await tx.auction.create({
-        data: {
-          name: value.name,
-          roomCode,
-          state: "draft",
-          createdById: req.user?.id || null,
-        },
-      });
-
-      // Auto-provision captain accounts.
-      // Password = team name without spaces (e.g. "Chennai Super Kings" -> "ChennaiSuperKings").
-      let linkedCaptains = 0;
-      for (let i = 0; i < value.teams.length; i++) {
-        const inputTeam = value.teams[i];
-        const newTeam = createdTeams[i];
-
-        if (inputTeam.captainEmail) {
-          let user = await tx.user.findUnique({
-            where: { email: inputTeam.captainEmail },
-          });
-
-          if (!user) {
-            const passwordHash = await hashPassword(
-              buildCaptainPassword(inputTeam.name)
-            );
-            user = await tx.user.create({
-              data: {
-                name: inputTeam.captain || "Captain",
-                email: inputTeam.captainEmail,
-                passwordHash,
-                role: "captain",
-                teamId: newTeam.id,
-                auctionId: auction.id,
-                emailVerified: true,
-                mustChangePassword: true,
-              },
-            });
-          } else {
-            user = await tx.user.update({
-              where: { id: user.id },
-              data: {
-                teamId: newTeam.id,
-                role: "captain",
-                auctionId: auction.id,
-              },
-            });
-          }
-
-          // captainId is unique per team — release this user from any team
-          // they previously captained (e.g. in an earlier auction) before
-          // assigning them to the new team.
-          await tx.team.updateMany({
-            where: { captainId: user.id, NOT: { id: newTeam.id } },
-            data: { captainId: null },
-          });
-
-          await tx.team.update({
-            where: { id: newTeam.id },
-            data: { captainId: user.id, captain: user.name },
-          });
-          linkedCaptains++;
-        }
-      }
-
-      // Auto-provision player (spectator) accounts.
-      // Password = player full name without spaces (e.g. "Het Shah" -> "HetShah").
-      const captainEmails = new Set(
-        value.teams
-          .map((t: any) => normalizeEmail(t.captainEmail || ""))
-          .filter(Boolean)
-      );
-      let linkedPlayers = 0;
-      for (let i = 0; i < value.players.length; i++) {
-        const inputPlayer = value.players[i];
-        const email = (inputPlayer.email || "").trim();
-        if (!email) continue;
-        // Already validated — should never overlap captains.
-        if (captainEmails.has(normalizeEmail(email))) continue;
-
-        const existing = await tx.user.findUnique({ where: { email } });
-        if (!existing) {
-          const passwordHash = await hashPassword(
-            buildPlayerPassword(inputPlayer.name)
-          );
-          await tx.user.create({
-            data: {
-              name: inputPlayer.name,
-              email,
-              passwordHash,
-              role: "player",
-              auctionId: auction.id,
-              emailVerified: true,
-              mustChangePassword: true,
-            },
-          });
-          linkedPlayers++;
-        } else {
-          // Keep existing admins/captains intact; just (re)scope players to this auction.
-          await tx.user.update({
-            where: { id: existing.id },
-            data: {
-              auctionId: auction.id,
-              role: existing.role === "player" ? "player" : existing.role,
-            },
-          });
-          linkedPlayers++;
-        }
-      }
-
-      await Promise.all(
-        createdTeams.map((t) =>
-          tx.auctionTeam.create({
-            data: { auctionId: auction.id, teamId: t.id },
-          })
-        )
-      );
-
-      await Promise.all(
-        createdPlayers.map((p, idx) =>
-          tx.auctionPlayer.create({
-            data: { auctionId: auction.id, playerId: p.id, sortOrder: idx },
-          })
-        )
-      );
-
-      return {
-        auction,
-        teamCount: createdTeams.length,
-        playerCount: createdPlayers.length,
-        linkedCaptains,
-        linkedPlayers,
-      };
-    });
+    const result = await runAuctionImport(req.user?.id, value);
 
     return res.status(StatusCodes.CREATED).json({
       auction: result.auction,
@@ -666,8 +742,61 @@ export async function createAuction(
   }
 }
 
+/** Super admin: one-click draft auction with predictable test logins. */
+export async function seedTestAuction(
+  req: Request & { user?: { id: string } },
+  res: Response
+) {
+  const payload = buildTestAuctionPayload();
+  const emailConflict = validateParticipantEmails(
+    payload.teams,
+    payload.players
+  );
+  if (emailConflict) {
+    return res.status(StatusCodes.BAD_REQUEST).json({ error: emailConflict });
+  }
+
+  for (const t of payload.teams) {
+    if (!t.captainEmail || !isTestParticipantEmail(t.captainEmail)) {
+      return res
+        .status(StatusCodes.INTERNAL_SERVER_ERROR)
+        .json({ error: "Test seed misconfiguration: invalid captain email." });
+    }
+  }
+  for (const p of payload.players) {
+    if (!p.email || !isTestParticipantEmail(p.email)) {
+      return res
+        .status(StatusCodes.INTERNAL_SERVER_ERROR)
+        .json({ error: "Test seed misconfiguration: invalid player email." });
+    }
+  }
+
+  try {
+    await wipeAllTestAuctions();
+    const result = await runAuctionImport(req.user?.id, payload, true);
+    const credentials = buildTestCredentials(
+      payload,
+      buildCaptainPassword,
+      buildPlayerPassword
+    );
+
+    return res.status(StatusCodes.CREATED).json({
+      auction: result.auction,
+      credentials,
+      message: `Test auction ready: ${result.teamCount} teams, ${result.playerCount} players.`,
+    });
+  } catch (err: any) {
+    logger.error({ err }, "Test auction seed failed");
+    return res
+      .status(StatusCodes.INTERNAL_SERVER_ERROR)
+      .json({ error: "Failed to create test auction: " + err.message });
+  }
+}
+
 export async function startAuction(req: Request, res: Response) {
   const { id } = req.params;
+
+  if (await blockTestAuctionForNonSuperAdmin(req, res, id)) return;
 
   const auction = await prisma.auction.findUnique({ where: { id } });
   if (!auction)
@@ -735,6 +864,8 @@ export async function startAuction(req: Request, res: Response) {
 
 export async function pauseAuction(req: Request, res: Response) {
   const { id } = req.params;
+  if (await blockTestAuctionForNonSuperAdmin(req, res, id)) return;
+
   const auction = await prisma.auction.update({
     where: { id },
     data: { state: "paused" },
@@ -745,6 +876,8 @@ export async function pauseAuction(req: Request, res: Response) {
 
 export async function resumeAuction(req: Request, res: Response) {
   const { id } = req.params;
+  if (await blockTestAuctionForNonSuperAdmin(req, res, id)) return;
+
   const auction = await prisma.auction.update({
     where: { id },
     data: { state: "active" },
@@ -762,6 +895,8 @@ export async function resumeAuction(req: Request, res: Response) {
 export async function placeBid(req: Request, res: Response) {
   try {
     const { id } = req.params;
+    if (await blockTestAuctionForNonSuperAdmin(req, res, id)) return;
+
     const { error, value } = bidSchema.validate(req.body);
     if (error)
       return res
@@ -928,6 +1063,8 @@ export async function placeBid(req: Request, res: Response) {
 
 export async function undoBid(req: Request, res: Response) {
   const { id } = req.params;
+  if (await blockTestAuctionForNonSuperAdmin(req, res, id)) return;
+
   const user = (req as any).user as { id: string; role: string } | undefined;
   if (!user)
     return res.status(StatusCodes.UNAUTHORIZED).json({ error: "Unauthorized" });
@@ -1013,6 +1150,8 @@ export async function undoBid(req: Request, res: Response) {
 
 export async function getAuctionReport(req: Request, res: Response) {
   const { id } = req.params;
+  if (await blockTestAuctionForNonSuperAdmin(req, res, id)) return;
+
   const auction = await prisma.auction.findUnique({
     where: { id },
     include: {
@@ -1101,6 +1240,8 @@ export async function getAuctionReport(req: Request, res: Response) {
 
 export async function closeAuction(req: Request, res: Response) {
   const { id } = req.params;
+  if (await blockTestAuctionForNonSuperAdmin(req, res, id)) return;
+
   const auction = await prisma.auction.findUnique({
     where: { id },
     include: {
@@ -1210,6 +1351,8 @@ export async function setCurrentPlayer(req: Request, res: Response) {
     return res.status(StatusCodes.BAD_REQUEST).json({ error: error.message });
 
   const { id } = req.params;
+  if (await blockTestAuctionForNonSuperAdmin(req, res, id)) return;
+
   const auction = await prisma.auction.update({
     where: { id },
     data: {
@@ -1246,6 +1389,8 @@ export async function setCurrentPlayer(req: Request, res: Response) {
 
 export async function sellCurrent(req: Request, res: Response) {
   const { id } = req.params;
+  if (await blockTestAuctionForNonSuperAdmin(req, res, id)) return;
+
   const auction = await prisma.auction.findUnique({
     where: { id },
     include: { skippedTeams: true },

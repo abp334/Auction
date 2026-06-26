@@ -1,8 +1,9 @@
 import { Router } from "express";
-import { requireAuth, requireRoles } from "../../middleware/auth.js";
+import { requireAuth, requireRoles, requireSuperAdmin } from "../../middleware/auth.js";
 import {
   closeAuction,
   createAuction,
+  seedTestAuction,
   listAuctions,
   placeBid,
   startAuction,
@@ -20,6 +21,12 @@ import {
 const router = Router();
 
 router.get("/", requireAuth, listAuctions);
+router.post(
+  "/seed-test",
+  requireAuth,
+  requireSuperAdmin(),
+  seedTestAuction
+);
 router.get("/:id/live", requireAuth, getAuctionLive);
 router.get("/:id", requireAuth, getAuction);
 router.post("/", requireAuth, requireRoles(["admin"]), createAuction);

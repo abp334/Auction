@@ -2,6 +2,7 @@ import { StatusCodes } from "http-status-codes";
 import type { Request, Response } from "express";
 import Joi from "joi";
 import prisma from "../utils/db.js";
+import { isSuperAdminUser } from "../utils/superAdmin.js";
 
 const createSchema = Joi.object({
   name: Joi.string().min(2).required(),
@@ -25,16 +26,64 @@ const updateSchema = Joi.object({
   captain: Joi.string().allow(null, "").optional(),
 });
 
-export async function listTeams(_req: Request, res: Response) {
-  const teams = await prisma.team.findMany({ orderBy: { name: "asc" } });
+async function getTestOnlyTeamIds(): Promise<Set<string>> {
+  const links = await prisma.auctionTeam.findMany({
+    select: {
+      teamId: true,
+      auction: { select: { isTest: true } },
+    },
+  });
+
+  const counts = new Map<string, { test: number; prod: number }>();
+  for (const link of links) {
+    const cur = counts.get(link.teamId) || { test: 0, prod: 0 };
+    if (link.auction.isTest) cur.test++;
+    else cur.prod++;
+    counts.set(link.teamId, cur);
+  }
+
+  const testOnly = new Set<string>();
+  for (const [teamId, c] of counts) {
+    if (c.test > 0 && c.prod === 0) testOnly.add(teamId);
+  }
+  return testOnly;
+}
+
+export async function listTeams(
+  req: Request & { user?: { id: string; role: string } },
+  res: Response
+) {
+  const superAdmin =
+    req.user?.id ? await isSuperAdminUser(req.user.id) : false;
+
+  let teams = await prisma.team.findMany({ orderBy: { name: "asc" } });
+
+  if (!superAdmin) {
+    const testOnlyIds = await getTestOnlyTeamIds();
+    teams = teams.filter((t) => !testOnlyIds.has(t.id));
+  }
+
   return res.status(StatusCodes.OK).json({ teams });
 }
 
-export async function getTeam(req: Request, res: Response) {
+export async function getTeam(
+  req: Request & { user?: { id: string; role: string } },
+  res: Response
+) {
   const { id } = req.params;
   const team = await prisma.team.findUnique({ where: { id } });
   if (!team)
     return res.status(StatusCodes.NOT_FOUND).json({ error: "Team not found" });
+
+  const superAdmin =
+    req.user?.id ? await isSuperAdminUser(req.user.id) : false;
+  if (!superAdmin) {
+    const testOnlyIds = await getTestOnlyTeamIds();
+    if (testOnlyIds.has(id)) {
+      return res.status(StatusCodes.NOT_FOUND).json({ error: "Team not found" });
+    }
+  }
+
   return res.status(StatusCodes.OK).json({ team });
 }
 

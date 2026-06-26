@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Gavel, LogOut } from "lucide-react";
 import AuctionTab from "@/components/admin/AuctionTab";
 import InviteCodesPanel from "@/components/admin/InviteCodesPanel";
+import TestAuctionPanel from "@/components/admin/TestAuctionPanel";
 import UserManagementPanel from "@/components/admin/UserManagementPanel";
 import { useAuth } from "@/hooks/use-auth";
 import logo from "@/assets/logo.png";
@@ -50,6 +51,7 @@ const AdminDashboard = () => {
       <main className="container mx-auto px-4 py-8">
         <div className="max-w-5xl mx-auto">
           <AuctionTab />
+          <TestAuctionPanel />
           <UserManagementPanel />
           <InviteCodesPanel />
         </div>
