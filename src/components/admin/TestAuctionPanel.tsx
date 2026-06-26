@@ -37,14 +37,6 @@ const TestAuctionPanel = () => {
       .finally(() => setChecking(false));
   }, []);
 
-  const refreshAuctionList = () => {
-    window.dispatchEvent(
-      new CustomEvent("bidarena:auctions-changed", {
-        detail: { auctionId: result?.auction.id },
-      })
-    );
-  };
-
   const handleSeed = async () => {
     setLoading(true);
     try {
