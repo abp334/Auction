@@ -2,7 +2,7 @@ import { StatusCodes } from "http-status-codes";
 import type { Request, Response } from "express";
 import crypto from "crypto";
 import prisma from "../utils/db.js";
-import { sendEmail } from "../utils/email.js";
+import { sendEmail, buildInviteEmailHtml, getAppUrl } from "../utils/email.js";
 
 function generateCode(): string {
   return crypto.randomBytes(4).toString("hex").toUpperCase();
@@ -30,18 +30,19 @@ export async function createInviteCode(
   // If the code is bound to a specific email, deliver it to that address.
   let emailed = false;
   if (invite.email) {
-    const appUrl =
-      process.env.APP_URL || process.env.FRONTEND_URL || "https://clashbid.live";
-    const expiryLine = expiresAt
+    const appUrl = getAppUrl();
+    const expiryText = expiresAt
       ? ` It expires on ${expiresAt.toDateString()}.`
       : "";
-    const message =
-      `You've been invited to ClashBid. Your invite code is ${code}.${expiryLine} ` +
+    const text =
+      `Welcome to Clash Bid! Your invite code is ${code}.${expiryText} ` +
       `Sign up at ${appUrl}/auth using this email address (${invite.email}) to create your organizer account.`;
     emailed = await sendEmail({
       to: invite.email,
+      subject: "You're invited to Clash Bid",
+      html: buildInviteEmailHtml({ code, appUrl, expiresAt }),
+      text,
       code,
-      message,
     });
   }
 

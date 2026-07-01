@@ -12,7 +12,7 @@ import {
   hashRefreshToken,
   compareRefreshToken,
 } from "../utils/auth.js";
-import { logger } from "../utils/logger.js";
+import { sendEmail, buildOtpEmailHtml } from "../utils/email.js";
 
 // Self-signup is restricted to auction organizers (admins).
 // Captain and player accounts are auto-provisioned during auction creation.
@@ -50,43 +50,23 @@ const completePasswordResetSchema = Joi.object({
   }),
 });
 
-async function sendOtpEmail(email: string, otp: string): Promise<boolean> {
-  const message = `Your verification code is ${otp}. It will expire in 10 minutes.`;
-  const serviceId = process.env.EMAILJS_SERVICE_ID;
-  const templateId = process.env.EMAILJS_TEMPLATE_ID;
-  const publicKey =
-    process.env.EMAILJS_USER_ID || process.env.EMAILJS_PUBLIC_KEY;
-  const privateKey = process.env.EMAILJS_PRIVATE_KEY;
-
-  if (serviceId && templateId && publicKey) {
-    try {
-      const body = {
-        service_id: serviceId,
-        template_id: templateId,
-        user_id: publicKey,
-        accessToken: privateKey,
-        template_params: { to_email: email, otp, message },
-      };
-      const res = await fetch("https://api.emailjs.com/api/v1.0/email/send", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      if (!res.ok) {
-        const text = await res.text();
-        logger.error({ status: res.status, text }, "EmailJS send failed");
-        return false;
-      }
-      logger.info({ email }, "OTP email sent");
-      return true;
-    } catch (err) {
-      logger.error({ err }, "EmailJS network error");
-      return false;
-    }
-  }
-
-  logger.warn({ email, otp }, "EmailJS not configured — OTP logged to console");
-  return true;
+async function sendOtpEmail(
+  email: string,
+  otp: string,
+  purpose: "signup" | "password" | "login" = "signup"
+): Promise<boolean> {
+  const subject =
+    purpose === "password"
+      ? "Reset your Clash Bid password"
+      : "Your Clash Bid verification code";
+  const text = `Your Clash Bid verification code is ${otp}. It will expire in 10 minutes. Never share this code.`;
+  return sendEmail({
+    to: email,
+    subject,
+    html: buildOtpEmailHtml({ otp, purpose }),
+    text,
+    code: otp,
+  });
 }
 
 function setRefreshCookie(res: Response, token: string) {
@@ -284,7 +264,7 @@ export async function login(req: Request, res: Response) {
       where: { id: user.id },
       data: { otpHash, otpExpires },
     });
-    await sendOtpEmail(user.email, otp);
+    await sendOtpEmail(user.email, otp, "password");
     return res.status(StatusCodes.OK).json({
       mustChangePassword: true,
       email: user.email,
