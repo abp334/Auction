@@ -76,7 +76,7 @@ const Auth = () => {
         return;
       }
 
-      const ok = await signup({
+      const result = await signup({
         email,
         password,
         name: email.split("@")[0],
@@ -84,7 +84,7 @@ const Auth = () => {
         inviteCode: inviteCode.trim(),
       });
 
-      if (ok) {
+      if (result.ok) {
         toast({
           title: "Verification Sent",
           description: "Check your email (or server console) for the OTP.",
@@ -93,7 +93,7 @@ const Auth = () => {
       } else {
         toast({
           title: "Error",
-          description: "Signup failed or email already exists.",
+          description: result.error || "Signup failed or email already exists.",
           variant: "destructive",
         });
       }

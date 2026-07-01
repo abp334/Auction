@@ -66,7 +66,11 @@ const InviteCodesPanel = () => {
       const newCode = await res.json();
       toast({
         title: "Invite Code Created",
-        description: `Code: ${newCode.code}`,
+        description: newCode.email
+          ? newCode.emailed
+            ? `Code ${newCode.code} emailed to ${newCode.email}.`
+            : `Code: ${newCode.code} (email not sent — check email settings).`
+          : `Code: ${newCode.code}`,
       });
       setEmail("");
       fetchCodes();

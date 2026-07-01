@@ -23,7 +23,7 @@ type AuthContextValue = {
     name: string;
     role?: "admin" | "player";
     inviteCode: string;
-  }) => Promise<boolean>;
+  }) => Promise<{ ok: boolean; error?: string }>;
   // ADDED: Verification function
   verifySignupOtp: (email: string, otp: string) => Promise<boolean>;
   // Forced secure password change for auto-provisioned accounts
@@ -99,8 +99,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       credentials: "include",
     });
     // If successful, server returns 200 OK (OTP sent)
-    if (!res.ok) return false;
-    return true;
+    if (!res.ok) {
+      let error = "Signup failed. Please try again.";
+      try {
+        const data = await res.json();
+        error = data.error || error;
+      } catch {
+        // ignore parse errors
+      }
+      return { ok: false, error };
+    }
+    return { ok: true };
   };
 
   // ADDED: Call the verify endpoint

@@ -132,7 +132,10 @@ export async function signup(req: Request, res: Response) {
     if (invite.email && invite.email.toLowerCase() !== value.email.toLowerCase()) {
       return res
         .status(StatusCodes.FORBIDDEN)
-        .json({ error: "This invite code is not valid for your email." });
+        .json({
+          error:
+            "This invite code is not assigned to you. Please use the email address it was issued to.",
+        });
     }
   }
 
