@@ -34,7 +34,7 @@ export function verifyRefreshToken(
 }
 
 export async function hashPassword(plain: string): Promise<string> {
-  return bcrypt.hash(plain, 12);
+  return bcrypt.hash(plain, 10);
 }
 
 /** Sandbox-only — fast enough for one-click test seed on Render. */

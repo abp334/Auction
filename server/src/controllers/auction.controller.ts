@@ -578,23 +578,21 @@ async function runAuctionImport(
     existingUsers.map((u) => [normalizeEmail(u.email), u])
   );
 
-  // bcrypt is slow — never run it inside an interactive transaction.
+  // Process hashes sequentially to prevent event loop blocking
   const hashFn = isTest ? hashTestPassword : hashPassword;
   const passwordHashes = new Map<string, string>();
-  await Promise.all([
-    ...value.teams.map(async (t) => {
-      const email = normalizeEmail(t.captainEmail || "");
-      if (!email || existingByEmail.has(email)) return;
-      passwordHashes.set(email, await hashFn(buildCaptainPassword(t.name)));
-    }),
-    ...value.players.map(async (p) => {
-      const email = normalizeEmail(p.email || "");
-      if (!email || captainEmailSet.has(email) || existingByEmail.has(email)) {
-        return;
-      }
-      passwordHashes.set(email, await hashFn(buildPlayerPassword(p.name)));
-    }),
-  ]);
+  
+  for (const t of value.teams) {
+    const email = normalizeEmail(t.captainEmail || "");
+    if (!email || existingByEmail.has(email)) continue;
+    passwordHashes.set(email, await hashFn(buildCaptainPassword(t.name)));
+  }
+
+  for (const p of value.players) {
+    const email = normalizeEmail(p.email || "");
+    if (!email || captainEmailSet.has(email) || existingByEmail.has(email)) continue;
+    passwordHashes.set(email, await hashFn(buildPlayerPassword(p.name)));
+  }
 
   return prisma.$transaction(
     async (tx) => {

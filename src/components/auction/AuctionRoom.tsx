@@ -403,9 +403,31 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
 
         auctionEndTimeRef.current = null;
         setTimeLeft(0);
-        setCurrentPlayer(null);
-        loadTeams();
-        loadMyPlayers();
+
+        setTeams((prev) => {
+          const updated = prev.map((t) =>
+            t.id === e.teamId
+              ? { ...t, purse: t.purse - e.price, players: t.players + 1 }
+              : t
+          );
+          teamsRef.current = updated;
+          return updated;
+        });
+
+        setCurrentPlayer((prevPlayer) => {
+          if (prevPlayer) {
+            setMyTeamId((currentMyTeamId) => {
+              if (currentMyTeamId === e.teamId) {
+                setMyTeamPlayers((roster) => [
+                  { ...prevPlayer, currentBid: e.price, basePrice: e.price },
+                  ...roster,
+                ]);
+              }
+              return currentMyTeamId;
+            });
+          }
+          return null;
+        });
       });
 
       s.on("auction:unsold", (e: any) => {
@@ -415,7 +437,6 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
         auctionEndTimeRef.current = null;
         setTimeLeft(0);
         setCurrentPlayer(null);
-        loadTeams();
       });
 
       s.on("auction:bid_undo", (e: any) => {
@@ -433,8 +454,6 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
           );
           setLastBidTeam(null);
         }
-        loadTeams();
-        loadMyPlayers();
       });
 
       s.on("auction:skip", (e: any) => {
