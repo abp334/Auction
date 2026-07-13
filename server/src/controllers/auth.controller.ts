@@ -424,6 +424,11 @@ export async function logout(req: Request, res: Response) {
       // token invalid, ignore
     }
   }
-  res.clearCookie("rt", { path: "/api/v1/auth" });
+  const isProd = process.env.NODE_ENV === "production";
+  res.clearCookie("rt", { 
+    path: "/api/v1/auth",
+    secure: isProd,
+    sameSite: isProd ? "none" : "lax"
+  });
   return res.status(StatusCodes.NO_CONTENT).send();
 }

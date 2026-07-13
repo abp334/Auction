@@ -12,6 +12,7 @@ import {
   RefreshCcw,
   Wifi,
   WifiOff,
+  LogOut,
 } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 import { io, type Socket } from "socket.io-client";
@@ -65,7 +66,12 @@ const getNextBidAmount = (player: Player, hasCurrentBid: boolean) =>
 
 const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
   const { toast } = useToast();
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
+
+  const handleLogout = async () => {
+    await logout();
+    window.location.href = "/";
+  };
 
   // State
   const [timeLeft, setTimeLeft] = useState(30);
@@ -705,7 +711,10 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
         <div className="container mx-auto px-4 py-4 flex items-center justify-between">
           <div className="flex items-center gap-4">
             <Button variant="secondary" size="sm" onClick={onExit}>
-              <ArrowLeft className="w-4 h-4 mr-2" /> Exit
+              <ArrowLeft className="w-4 h-4 mr-2" /> {role === 'admin' ? 'Dashboard' : 'Exit'}
+            </Button>
+            <Button variant="outline" size="sm" onClick={handleLogout} className="border-red-500/50 text-red-500 hover:bg-red-500/10">
+              <LogOut className="w-4 h-4 mr-2" /> Logout
             </Button>
             <div>
               <p className="text-sm text-amber-400/75">Room Code</p>
