@@ -193,7 +193,8 @@ async function rejectIfNotStaticOwner(
   }
   const superAdmin = await isSuperAdminUser(req.user.id);
   if (superAdmin) return false;
-  if (auction.createdById && auction.createdById !== req.user.id) {
+  // Null createdById is unowned — deny all non-super-admins (legacy / bad create path).
+  if (!auction.createdById || auction.createdById !== req.user.id) {
     res.status(StatusCodes.FORBIDDEN).json({ error: "Not your auction" });
     return true;
   }
@@ -896,7 +897,9 @@ export async function createAuction(
       }),
       isSuperAdminUser(req.user.id),
     ]);
-    if (!superAdmin && dbUser?.auctionMode && dbUser.auctionMode !== mode) {
+    // Treat null/undefined auctionMode as "live" (same as listAuctions).
+    const userMode = dbUser?.auctionMode || "live";
+    if (!superAdmin && userMode !== mode) {
       return res.status(StatusCodes.FORBIDDEN).json({
         error:
           mode === "static"
