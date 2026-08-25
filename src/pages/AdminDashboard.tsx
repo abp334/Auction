@@ -1,16 +1,18 @@
-import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { Gavel, LogOut } from "lucide-react";
+import { LogOut } from "lucide-react";
 import AuctionTab from "@/components/admin/AuctionTab";
+import StaticAuctionTab from "@/components/admin/StaticAuctionTab";
 import InviteCodesPanel from "@/components/admin/InviteCodesPanel";
 import TestAuctionPanel from "@/components/admin/TestAuctionPanel";
 import UserManagementPanel from "@/components/admin/UserManagementPanel";
 import { useAuth } from "@/hooks/use-auth";
 import logo from "@/assets/logo.png";
+
 const AdminDashboard = () => {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
+  const isStatic = user?.auctionMode === "static";
 
   const handleLogout = async () => {
     await logout();
@@ -31,9 +33,12 @@ const AdminDashboard = () => {
               }}
             />
             <div className="text-white">
-              <h1 className="text-2xl font-bold">Auction Control Center</h1>
+              <h1 className="text-2xl font-bold">
+                {isStatic ? "Static Auction Ledger" : "Auction Control Center"}
+              </h1>
               <p className="text-sm opacity-90">
                 Welcome, {user?.name || "Admin"}
+                {isStatic ? " · Physical auction companion" : ""}
               </p>
             </div>
           </div>
@@ -50,8 +55,8 @@ const AdminDashboard = () => {
 
       <main className="container mx-auto px-4 py-8">
         <div className="max-w-5xl mx-auto">
-          <AuctionTab />
-          <TestAuctionPanel />
+          {isStatic ? <StaticAuctionTab /> : <AuctionTab />}
+          {!isStatic && <TestAuctionPanel />}
           <UserManagementPanel />
           <InviteCodesPanel />
         </div>

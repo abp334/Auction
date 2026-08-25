@@ -83,6 +83,8 @@ function generateRoomCode(): string {
 
 const importSchema = Joi.object({
   name: Joi.string().min(2).required(),
+  mode: Joi.string().valid("live", "static").default("live"),
+  maxSquadSize: Joi.number().integer().min(1).max(100).optional(),
   teams: Joi.array()
     .items(
       Joi.object({
@@ -121,6 +123,16 @@ const importSchema = Joi.object({
     .required(),
 });
 
+const registerSaleSchema = Joi.object({
+  playerId: Joi.string().required(),
+  teamId: Joi.string().required(),
+  amount: Joi.number().integer().min(0).required(),
+});
+
+const registerUnsoldSchema = Joi.object({
+  playerId: Joi.string().required(),
+});
+
 const bidSchema = Joi.object({
   teamId: Joi.string().required(),
   amount: Joi.number().integer().min(0).required(),
@@ -132,6 +144,61 @@ const currentPlayerSchema = Joi.object({
 });
 
 const pendingBids = new Map<string, Promise<any>>();
+
+/** Reject live-only actions on static auctions. Returns true if response was sent. */
+async function rejectIfStaticAuction(
+  res: Response,
+  auctionId: string
+): Promise<boolean> {
+  const auction = await prisma.auction.findUnique({
+    where: { id: auctionId },
+    select: { mode: true },
+  });
+  if (auction?.mode === "static") {
+    res.status(StatusCodes.BAD_REQUEST).json({
+      error: "This action is not available for static ledger auctions.",
+    });
+    return true;
+  }
+  return false;
+}
+
+/** Reject static-only actions on live auctions. Returns true if response was sent. */
+function rejectIfNotStatic(
+  res: Response,
+  mode: string | undefined
+): boolean {
+  if (mode !== "static") {
+    res.status(StatusCodes.BAD_REQUEST).json({
+      error: "This action is only available for static ledger auctions.",
+    });
+    return true;
+  }
+  return false;
+}
+
+/** Static auctions are tenant-scoped to the creator (except super admin). */
+async function rejectIfNotStaticOwner(
+  req: Request & { user?: { id: string; role: string } },
+  res: Response,
+  auction: { createdById: string | null; mode?: string }
+): Promise<boolean> {
+  if (!req.user?.id) {
+    res.status(StatusCodes.UNAUTHORIZED).json({ error: "Unauthorized" });
+    return true;
+  }
+  if (req.user.role !== "admin") {
+    res.status(StatusCodes.FORBIDDEN).json({ error: "Admin only" });
+    return true;
+  }
+  const superAdmin = await isSuperAdminUser(req.user.id);
+  if (superAdmin) return false;
+  if (auction.createdById && auction.createdById !== req.user.id) {
+    res.status(StatusCodes.FORBIDDEN).json({ error: "Not your auction" });
+    return true;
+  }
+  return false;
+}
 
 /** Production admins must not see or mutate sandbox auctions. */
 async function blockTestAuctionForNonSuperAdmin(
@@ -175,12 +242,24 @@ export async function listAuctions(
   const where: {
     roomCode?: string;
     isTest?: boolean;
+    mode?: "live" | "static";
+    createdById?: string;
     NOT?: { name: string };
   } = {};
   if (roomCode) where.roomCode = roomCode;
   if (req.user?.role === "admin" && !superAdmin) {
     where.isTest = false;
     where.NOT = { name: "ClashBid Test Auction" };
+
+    const dbUser = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      select: { auctionMode: true },
+    });
+    const mode = dbUser?.auctionMode || "live";
+    where.mode = mode;
+    if (mode === "static") {
+      where.createdById = req.user.id;
+    }
   }
 
   let auctions = await prisma.auction.findMany({
@@ -190,6 +269,7 @@ export async function listAuctions(
       name: true,
       roomCode: true,
       state: true,
+      mode: true,
       isTest: true,
       currentPlayerId: true,
       currentBidAmount: true,
@@ -197,7 +277,9 @@ export async function listAuctions(
       currentBidAt: true,
       timerEndsAt: true,
       timerDuration: true,
+      maxSquadSize: true,
       createdAt: true,
+      createdById: true,
     },
     orderBy: { createdAt: "desc" },
   });
@@ -266,6 +348,14 @@ export async function getAuction(
     return res
       .status(StatusCodes.NOT_FOUND)
       .json({ error: "Auction not found" });
+
+  if (
+    auction.mode === "static" &&
+    req.user?.role === "admin" &&
+    (await rejectIfNotStaticOwner(req, res, auction))
+  ) {
+    return;
+  }
 
   const result = {
     ...auction,
@@ -518,6 +608,8 @@ export async function getAuctionLive(
 
 type AuctionImportInput = {
   name: string;
+  mode?: "live" | "static";
+  maxSquadSize?: number;
   teams: Array<{
     name: string;
     wallet?: number;
@@ -545,6 +637,9 @@ async function runAuctionImport(
   value: AuctionImportInput,
   isTest = false
 ) {
+  const mode = value.mode === "static" ? "static" : "live";
+  const isStatic = mode === "static";
+
   let roomCode = generateRoomCode();
   for (let attempt = 0; attempt < 5; attempt++) {
     const exists = await prisma.auction.findUnique({ where: { roomCode } });
@@ -558,14 +653,17 @@ async function runAuctionImport(
       .filter(Boolean)
   );
 
-  const participantEmails = [
-    ...value.teams
-      .map((t) => normalizeEmail(t.captainEmail || ""))
-      .filter(Boolean),
-    ...value.players
-      .map((p) => normalizeEmail(p.email || ""))
-      .filter((email) => email && !captainEmailSet.has(email)),
-  ];
+  // Static ledger: teams/players are data only — no login accounts.
+  const participantEmails = isStatic
+    ? []
+    : [
+        ...value.teams
+          .map((t) => normalizeEmail(t.captainEmail || ""))
+          .filter(Boolean),
+        ...value.players
+          .map((p) => normalizeEmail(p.email || ""))
+          .filter((email) => email && !captainEmailSet.has(email)),
+      ];
 
   const existingUsers = participantEmails.length
     ? await prisma.user.findMany({
@@ -578,208 +676,252 @@ async function runAuctionImport(
     existingUsers.map((u) => [normalizeEmail(u.email), u])
   );
 
-  // Process hashes sequentially to prevent event loop blocking
+  // Process hashes sequentially to prevent event loop blocking (live only)
   const hashFn = isTest ? hashTestPassword : hashPassword;
   const passwordHashes = new Map<string, string>();
-  
-  for (const t of value.teams) {
-    const email = normalizeEmail(t.captainEmail || "");
-    if (!email || existingByEmail.has(email)) continue;
-    passwordHashes.set(email, await hashFn(buildCaptainPassword(t.name)));
-  }
 
-  for (const p of value.players) {
-    const email = normalizeEmail(p.email || "");
-    if (!email || captainEmailSet.has(email) || existingByEmail.has(email)) continue;
-    passwordHashes.set(email, await hashFn(buildPlayerPassword(p.name)));
+  if (!isStatic) {
+    for (const t of value.teams) {
+      const email = normalizeEmail(t.captainEmail || "");
+      if (!email || existingByEmail.has(email)) continue;
+      passwordHashes.set(email, await hashFn(buildCaptainPassword(t.name)));
+    }
+
+    for (const p of value.players) {
+      const email = normalizeEmail(p.email || "");
+      if (!email || captainEmailSet.has(email) || existingByEmail.has(email))
+        continue;
+      passwordHashes.set(email, await hashFn(buildPlayerPassword(p.name)));
+    }
   }
 
   return prisma.$transaction(
     async (tx) => {
-    const createdTeams = await Promise.all(
-      value.teams.map((t) =>
-        tx.team.create({
-          data: {
-            name: t.name,
-            wallet: t.wallet || 1000000,
-            logo: t.logo || null,
-            owner: t.owner || null,
-            mobile: t.code ? String(t.code) : null,
-            captain: t.captain || null,
-          },
-        })
-      )
-    );
+      const createdTeams = await Promise.all(
+        value.teams.map((t) =>
+          tx.team.create({
+            data: {
+              name: t.name,
+              wallet: t.wallet || 1000000,
+              logo: t.logo || null,
+              owner: t.owner || null,
+              mobile: t.code ? String(t.code) : null,
+              captain: t.captain || null,
+              email: t.captainEmail || null,
+            },
+          })
+        )
+      );
 
-    const createdPlayers = await Promise.all(
-      value.players.map((p) =>
-        tx.player.create({
-          data: {
-            name: p.name,
-            role: p.role,
-            basePrice: p.basePrice,
-            photo: p.photo || null,
-            age: p.age || null,
-            batsmanType: p.batsmanType || null,
-            bowlerType: p.bowlerType || null,
-            mobile: p.mobile ? String(p.mobile) : null,
-            email: p.email || null,
-            teamId: null,
-          },
-        })
-      )
-    );
+      const createdPlayers = await Promise.all(
+        value.players.map((p) =>
+          tx.player.create({
+            data: {
+              name: p.name,
+              role: p.role,
+              basePrice: p.basePrice,
+              photo: p.photo || null,
+              age: p.age || null,
+              batsmanType: p.batsmanType || null,
+              bowlerType: p.bowlerType || null,
+              mobile: p.mobile ? String(p.mobile) : null,
+              email: p.email || null,
+              teamId: null,
+            },
+          })
+        )
+      );
 
-    const auction = await tx.auction.create({
-      data: {
-        name: value.name,
-        roomCode,
-        state: "draft",
-        isTest,
-        createdById: userId || null,
-      },
-    });
+      const auction = await tx.auction.create({
+        data: {
+          name: value.name,
+          roomCode,
+          state: isStatic ? "active" : "draft",
+          mode,
+          isTest,
+          createdById: userId || null,
+          maxSquadSize: value.maxSquadSize || 25,
+        },
+      });
 
-    let linkedCaptains = 0;
-    for (let i = 0; i < value.teams.length; i++) {
-      const inputTeam = value.teams[i];
-      const newTeam = createdTeams[i];
+      let linkedCaptains = 0;
+      let linkedPlayers = 0;
 
-      if (inputTeam.captainEmail) {
-        const email = normalizeEmail(inputTeam.captainEmail);
-        let user = existingByEmail.get(email);
+      if (!isStatic) {
+        for (let i = 0; i < value.teams.length; i++) {
+          const inputTeam = value.teams[i];
+          const newTeam = createdTeams[i];
 
-        if (!user) {
-          const passwordHash = passwordHashes.get(email);
-          if (!passwordHash) {
-            throw new Error(`Missing password hash for captain ${email}`);
+          if (inputTeam.captainEmail) {
+            const email = normalizeEmail(inputTeam.captainEmail);
+            let user = existingByEmail.get(email);
+
+            if (!user) {
+              const passwordHash = passwordHashes.get(email);
+              if (!passwordHash) {
+                throw new Error(`Missing password hash for captain ${email}`);
+              }
+              user = await tx.user.create({
+                data: {
+                  name: inputTeam.captain || "Captain",
+                  email: inputTeam.captainEmail,
+                  passwordHash,
+                  role: "captain",
+                  teamId: newTeam.id,
+                  auctionId: auction.id,
+                  emailVerified: true,
+                  mustChangePassword: true,
+                },
+              });
+              existingByEmail.set(email, user);
+            } else {
+              user = await tx.user.update({
+                where: { id: user.id },
+                data: {
+                  teamId: newTeam.id,
+                  role: "captain",
+                  auctionId: auction.id,
+                },
+              });
+              existingByEmail.set(email, user);
+            }
+
+            await tx.team.updateMany({
+              where: { captainId: user.id, NOT: { id: newTeam.id } },
+              data: { captainId: null },
+            });
+
+            await tx.team.update({
+              where: { id: newTeam.id },
+              data: {
+                captainId: user.id,
+                captain: inputTeam.captain || "Captain",
+              },
+            });
+            linkedCaptains++;
           }
-          user = await tx.user.create({
-            data: {
-              name: inputTeam.captain || "Captain",
-              email: inputTeam.captainEmail,
-              passwordHash,
-              role: "captain",
-              teamId: newTeam.id,
-              auctionId: auction.id,
-              emailVerified: true,
-              mustChangePassword: true,
-            },
-          });
-          existingByEmail.set(email, user);
-        } else {
-          user = await tx.user.update({
-            where: { id: user.id },
-            data: {
-              teamId: newTeam.id,
-              role: "captain",
-              auctionId: auction.id,
-            },
-          });
-          existingByEmail.set(email, user);
         }
 
-        await tx.team.updateMany({
-          where: { captainId: user.id, NOT: { id: newTeam.id } },
-          data: { captainId: null },
-        });
+        for (let i = 0; i < value.players.length; i++) {
+          const inputPlayer = value.players[i];
+          const email = normalizeEmail(inputPlayer.email || "");
+          if (!email) continue;
+          if (captainEmailSet.has(email)) continue;
 
-        await tx.team.update({
-          where: { id: newTeam.id },
-          data: {
-            captainId: user.id,
-            captain: inputTeam.captain || "Captain",
-          },
-        });
-        linkedCaptains++;
-      }
-    }
-
-    let linkedPlayers = 0;
-    for (let i = 0; i < value.players.length; i++) {
-      const inputPlayer = value.players[i];
-      const email = normalizeEmail(inputPlayer.email || "");
-      if (!email) continue;
-      if (captainEmailSet.has(email)) continue;
-
-      const existing = existingByEmail.get(email);
-      if (!existing) {
-        const passwordHash = passwordHashes.get(email);
-        if (!passwordHash) {
-          throw new Error(`Missing password hash for player ${email}`);
+          const existing = existingByEmail.get(email);
+          if (!existing) {
+            const passwordHash = passwordHashes.get(email);
+            if (!passwordHash) {
+              throw new Error(`Missing password hash for player ${email}`);
+            }
+            const created = await tx.user.create({
+              data: {
+                name: inputPlayer.name,
+                email: inputPlayer.email!,
+                passwordHash,
+                role: "player",
+                auctionId: auction.id,
+                emailVerified: true,
+                mustChangePassword: true,
+              },
+            });
+            existingByEmail.set(email, created);
+            linkedPlayers++;
+          } else {
+            await tx.user.update({
+              where: { id: existing.id },
+              data: {
+                auctionId: auction.id,
+                role: existing.role === "player" ? "player" : existing.role,
+              },
+            });
+            linkedPlayers++;
+          }
         }
-        const created = await tx.user.create({
-          data: {
-            name: inputPlayer.name,
-            email: inputPlayer.email!,
-            passwordHash,
-            role: "player",
-            auctionId: auction.id,
-            emailVerified: true,
-            mustChangePassword: true,
-          },
-        });
-        existingByEmail.set(email, created);
-        linkedPlayers++;
-      } else {
-        await tx.user.update({
-          where: { id: existing.id },
-          data: {
-            auctionId: auction.id,
-            role: existing.role === "player" ? "player" : existing.role,
-          },
-        });
-        linkedPlayers++;
       }
-    }
 
-    await Promise.all(
-      createdTeams.map((t) =>
-        tx.auctionTeam.create({
-          data: { auctionId: auction.id, teamId: t.id },
-        })
-      )
-    );
+      await Promise.all(
+        createdTeams.map((t) =>
+          tx.auctionTeam.create({
+            data: { auctionId: auction.id, teamId: t.id },
+          })
+        )
+      );
 
-    await Promise.all(
-      createdPlayers.map((p, idx) =>
-        tx.auctionPlayer.create({
-          data: { auctionId: auction.id, playerId: p.id, sortOrder: idx },
-        })
-      )
-    );
+      // Preserve CSV / array order exactly via sortOrder
+      await Promise.all(
+        createdPlayers.map((p, idx) =>
+          tx.auctionPlayer.create({
+            data: { auctionId: auction.id, playerId: p.id, sortOrder: idx },
+          })
+        )
+      );
 
-    return {
-      auction,
-      teamCount: createdTeams.length,
-      playerCount: createdPlayers.length,
-      linkedCaptains,
-      linkedPlayers,
-    };
-  },
+      // For static mode, set current player to first in CSV order
+      if (isStatic && createdPlayers.length > 0) {
+        await tx.auction.update({
+          where: { id: auction.id },
+          data: { currentPlayerId: createdPlayers[0].id },
+        });
+        auction.currentPlayerId = createdPlayers[0].id;
+      }
+
+      return {
+        auction,
+        teamCount: createdTeams.length,
+        playerCount: createdPlayers.length,
+        linkedCaptains,
+        linkedPlayers,
+      };
+    },
     { maxWait: 10_000, timeout: 60_000 }
   );
 }
 
 export async function createAuction(
-  req: Request & { user?: { id: string } },
+  req: Request & { user?: { id: string; role: string } },
   res: Response
 ) {
   const { error, value } = importSchema.validate(req.body);
   if (error)
     return res.status(StatusCodes.BAD_REQUEST).json({ error: error.message });
 
-  const emailConflict = validateParticipantEmails(value.teams, value.players);
-  if (emailConflict) {
-    return res.status(StatusCodes.BAD_REQUEST).json({ error: emailConflict });
+  const mode = value.mode === "static" ? "static" : "live";
+
+  if (req.user?.id) {
+    const [dbUser, superAdmin] = await Promise.all([
+      prisma.user.findUnique({
+        where: { id: req.user.id },
+        select: { auctionMode: true },
+      }),
+      isSuperAdminUser(req.user.id),
+    ]);
+    if (!superAdmin && dbUser?.auctionMode && dbUser.auctionMode !== mode) {
+      return res.status(StatusCodes.FORBIDDEN).json({
+        error:
+          mode === "static"
+            ? "Your account is not entitled to static ledger auctions."
+            : "Your account is not entitled to live multiplayer auctions.",
+      });
+    }
+  }
+
+  if (mode === "live") {
+    const emailConflict = validateParticipantEmails(value.teams, value.players);
+    if (emailConflict) {
+      return res.status(StatusCodes.BAD_REQUEST).json({ error: emailConflict });
+    }
   }
 
   try {
-    const result = await runAuctionImport(req.user?.id, value);
+    const result = await runAuctionImport(req.user?.id, { ...value, mode });
 
     return res.status(StatusCodes.CREATED).json({
       auction: result.auction,
-      message: `Imported ${result.teamCount} teams (${result.linkedCaptains} captains linked) and ${result.playerCount} players (${result.linkedPlayers} player logins created).`,
+      message:
+        mode === "static"
+          ? `Static ledger ready: ${result.teamCount} teams and ${result.playerCount} players (CSV order preserved).`
+          : `Imported ${result.teamCount} teams (${result.linkedCaptains} captains linked) and ${result.playerCount} players (${result.linkedPlayers} player logins created).`,
     });
   } catch (err: any) {
     logger.error({ err }, "Import failed");
@@ -844,6 +986,7 @@ export async function startAuction(req: Request, res: Response) {
   const { id } = req.params;
 
   if (await blockTestAuctionForNonSuperAdmin(req, res, id)) return;
+  if (await rejectIfStaticAuction(res, id)) return;
 
   const auction = await prisma.auction.findUnique({ where: { id } });
   if (!auction)
@@ -912,6 +1055,7 @@ export async function startAuction(req: Request, res: Response) {
 export async function pauseAuction(req: Request, res: Response) {
   const { id } = req.params;
   if (await blockTestAuctionForNonSuperAdmin(req, res, id)) return;
+  if (await rejectIfStaticAuction(res, id)) return;
 
   const auction = await prisma.auction.update({
     where: { id },
@@ -924,6 +1068,7 @@ export async function pauseAuction(req: Request, res: Response) {
 export async function resumeAuction(req: Request, res: Response) {
   const { id } = req.params;
   if (await blockTestAuctionForNonSuperAdmin(req, res, id)) return;
+  if (await rejectIfStaticAuction(res, id)) return;
 
   const auction = await prisma.auction.update({
     where: { id },
@@ -943,6 +1088,7 @@ export async function placeBid(req: Request, res: Response) {
   try {
     const { id } = req.params;
     if (await blockTestAuctionForNonSuperAdmin(req, res, id)) return;
+    if (await rejectIfStaticAuction(res, id)) return;
 
     const { error, value } = bidSchema.validate(req.body);
     if (error)
@@ -1111,6 +1257,7 @@ export async function placeBid(req: Request, res: Response) {
 export async function undoBid(req: Request, res: Response) {
   const { id } = req.params;
   if (await blockTestAuctionForNonSuperAdmin(req, res, id)) return;
+  if (await rejectIfStaticAuction(res, id)) return;
 
   const user = (req as any).user as { id: string; role: string } | undefined;
   if (!user)
@@ -1206,6 +1353,7 @@ export async function getAuctionReport(req: Request, res: Response) {
       players: { include: { player: true } },
       sales: { include: { player: true, team: true } },
       bids: { include: { player: true, team: true } },
+      unsoldPlayers: true,
     },
   });
 
@@ -1213,6 +1361,17 @@ export async function getAuctionReport(req: Request, res: Response) {
     return res
       .status(StatusCodes.NOT_FOUND)
       .json({ error: "Auction not found" });
+
+  if (
+    auction.mode === "static" &&
+    (await rejectIfNotStaticOwner(
+      req as Request & { user?: { id: string; role: string } },
+      res,
+      auction
+    ))
+  ) {
+    return;
+  }
 
   const teams = auction.teams.map((at) => {
     const teamPlayers = auction.players
@@ -1242,9 +1401,17 @@ export async function getAuctionReport(req: Request, res: Response) {
     };
   });
 
+  const unsoldIds = new Set(auction.unsoldPlayers.map((u) => u.playerId));
   const unsold = auction.players
     .map((ap) => ap.player)
-    .filter((p) => !p.teamId)
+    .filter((p) => {
+      if (p.teamId) return false;
+      // Static: only explicitly marked unsold. Live: anyone without a team.
+      if (auction.mode === "static") {
+        return p.isUnsold || unsoldIds.has(p.id);
+      }
+      return true;
+    })
     .map((p) => ({
       Name: p.name,
       Role: p.role,
@@ -1288,6 +1455,7 @@ export async function getAuctionReport(req: Request, res: Response) {
 export async function closeAuction(req: Request, res: Response) {
   const { id } = req.params;
   if (await blockTestAuctionForNonSuperAdmin(req, res, id)) return;
+  if (await rejectIfStaticAuction(res, id)) return;
 
   const auction = await prisma.auction.findUnique({
     where: { id },
@@ -1399,6 +1567,7 @@ export async function setCurrentPlayer(req: Request, res: Response) {
 
   const { id } = req.params;
   if (await blockTestAuctionForNonSuperAdmin(req, res, id)) return;
+  if (await rejectIfStaticAuction(res, id)) return;
 
   const auction = await prisma.auction.update({
     where: { id },
@@ -1437,6 +1606,7 @@ export async function setCurrentPlayer(req: Request, res: Response) {
 export async function sellCurrent(req: Request, res: Response) {
   const { id } = req.params;
   if (await blockTestAuctionForNonSuperAdmin(req, res, id)) return;
+  if (await rejectIfStaticAuction(res, id)) return;
 
   const auction = await prisma.auction.findUnique({
     where: { id },
@@ -1534,6 +1704,7 @@ export async function sellCurrent(req: Request, res: Response) {
 
 export async function skipPlayer(req: Request, res: Response) {
   const { id } = req.params;
+  if (await rejectIfStaticAuction(res, id)) return;
   const user = (req as any).user;
 
   const auction = await prisma.auction.findUnique({
@@ -1571,4 +1742,484 @@ export async function skipPlayer(req: Request, res: Response) {
   });
 
   return res.status(StatusCodes.OK).json({ auction });
+}
+
+async function advanceStaticCurrentPlayer(
+  auctionId: string,
+  excludePlayerId?: string
+) {
+  const auctionPlayers = await prisma.auctionPlayer.findMany({
+    where: { auctionId },
+    orderBy: { sortOrder: "asc" },
+    include: {
+      player: {
+        select: { id: true, teamId: true, isUnsold: true },
+      },
+    },
+  });
+
+  const unsoldRows = await prisma.unsoldPlayer.findMany({
+    where: { auctionId },
+    select: { playerId: true },
+  });
+  const unsoldSet = new Set(unsoldRows.map((u) => u.playerId));
+
+  const next = auctionPlayers.find((ap) => {
+    const p = ap.player;
+    if (excludePlayerId && p.id === excludePlayerId) return false;
+    if (p.teamId) return false;
+    if (p.isUnsold || unsoldSet.has(p.id)) return false;
+    return true;
+  });
+
+  await prisma.auction.update({
+    where: { id: auctionId },
+    data: { currentPlayerId: next?.player.id || null },
+  });
+
+  return next?.player.id || null;
+}
+
+/** Static ledger: register a sold player → team → amount with budget enforcement. */
+export async function registerSale(
+  req: Request & { user?: { id: string; role: string } },
+  res: Response
+) {
+  const { id } = req.params;
+  if (await blockTestAuctionForNonSuperAdmin(req, res, id)) return;
+
+  const { error, value } = registerSaleSchema.validate(req.body);
+  if (error)
+    return res.status(StatusCodes.BAD_REQUEST).json({ error: error.message });
+
+  const auction = await prisma.auction.findUnique({
+    where: { id },
+    select: {
+      id: true,
+      mode: true,
+      state: true,
+      maxSquadSize: true,
+      createdById: true,
+    },
+  });
+  if (!auction)
+    return res.status(StatusCodes.NOT_FOUND).json({ error: "Auction not found" });
+  if (rejectIfNotStatic(res, auction.mode)) return;
+  if (await rejectIfNotStaticOwner(req, res, auction)) return;
+  if (auction.state === "completed")
+    return res
+      .status(StatusCodes.CONFLICT)
+      .json({ error: "Auction is completed" });
+
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      const [playerInAuction, teamInAuction, existingSale, unsold] =
+        await Promise.all([
+          tx.auctionPlayer.findUnique({
+            where: {
+              auctionId_playerId: { auctionId: id, playerId: value.playerId },
+            },
+            include: { player: true },
+          }),
+          tx.auctionTeam.findUnique({
+            where: {
+              auctionId_teamId: { auctionId: id, teamId: value.teamId },
+            },
+            include: { team: true },
+          }),
+          tx.sale.findUnique({
+            where: {
+              auctionId_playerId: { auctionId: id, playerId: value.playerId },
+            },
+          }),
+          tx.unsoldPlayer.findUnique({
+            where: {
+              auctionId_playerId: { auctionId: id, playerId: value.playerId },
+            },
+          }),
+        ]);
+
+      if (!playerInAuction)
+        return { error: "Player is not part of this auction", status: 400 };
+      if (!teamInAuction)
+        return { error: "Team is not part of this auction", status: 400 };
+      if (existingSale || playerInAuction.player.teamId)
+        return { error: "Player is already sold", status: 409 };
+      if (unsold || playerInAuction.player.isUnsold)
+        return {
+          error: "Player is marked unsold. Undo unsold first.",
+          status: 409,
+        };
+
+      const player = playerInAuction.player;
+      const team = teamInAuction.team;
+
+      if (value.amount < player.basePrice) {
+        return {
+          error: `Amount must be at least base price (Rs. ${player.basePrice.toLocaleString("en-IN")})`,
+          status: 400,
+        };
+      }
+      if (team.wallet < value.amount) {
+        return {
+          error: `Insufficient budget. ${team.name} has Rs. ${team.wallet.toLocaleString("en-IN")} remaining.`,
+          status: 400,
+        };
+      }
+
+      const squadSize = await tx.player.count({ where: { teamId: team.id } });
+      const maxSquad = auction.maxSquadSize || 25;
+      if (squadSize >= maxSquad) {
+        return {
+          error: `Squad full for ${team.name} (Max ${maxSquad} players)`,
+          status: 400,
+        };
+      }
+
+      await tx.team.update({
+        where: { id: team.id },
+        data: { wallet: { decrement: value.amount } },
+      });
+      await tx.player.update({
+        where: { id: player.id },
+        data: { teamId: team.id, isUnsold: false },
+      });
+      const sale = await tx.sale.create({
+        data: {
+          auctionId: id,
+          playerId: player.id,
+          teamId: team.id,
+          price: value.amount,
+        },
+      });
+
+      return {
+        sale,
+        player: { id: player.id, name: player.name },
+        team: { id: team.id, name: team.name, wallet: team.wallet - value.amount },
+        price: value.amount,
+      };
+    });
+
+    if ("error" in result && result.error) {
+      return res
+        .status(result.status || StatusCodes.BAD_REQUEST)
+        .json({ error: result.error });
+    }
+
+    const nextPlayerId = await advanceStaticCurrentPlayer(id, value.playerId);
+
+    return res.status(StatusCodes.OK).json({
+      ...result,
+      currentPlayerId: nextPlayerId,
+    });
+  } catch (err: any) {
+    logger.error({ err }, "registerSale failed");
+    return res
+      .status(StatusCodes.INTERNAL_SERVER_ERROR)
+      .json({ error: "Failed to register sale" });
+  }
+}
+
+/** Static ledger: mark player unsold / skipped. */
+export async function registerUnsold(
+  req: Request & { user?: { id: string; role: string } },
+  res: Response
+) {
+  const { id } = req.params;
+  if (await blockTestAuctionForNonSuperAdmin(req, res, id)) return;
+
+  const { error, value } = registerUnsoldSchema.validate(req.body);
+  if (error)
+    return res.status(StatusCodes.BAD_REQUEST).json({ error: error.message });
+
+  const auction = await prisma.auction.findUnique({
+    where: { id },
+    select: { mode: true, state: true, createdById: true },
+  });
+  if (!auction)
+    return res.status(StatusCodes.NOT_FOUND).json({ error: "Auction not found" });
+  if (rejectIfNotStatic(res, auction.mode)) return;
+  if (await rejectIfNotStaticOwner(req, res, auction)) return;
+  if (auction.state === "completed")
+    return res
+      .status(StatusCodes.CONFLICT)
+      .json({ error: "Auction is completed" });
+
+  const playerInAuction = await prisma.auctionPlayer.findUnique({
+    where: {
+      auctionId_playerId: { auctionId: id, playerId: value.playerId },
+    },
+    include: { player: true },
+  });
+  if (!playerInAuction)
+    return res
+      .status(StatusCodes.BAD_REQUEST)
+      .json({ error: "Player is not part of this auction" });
+  if (playerInAuction.player.teamId)
+    return res
+      .status(StatusCodes.CONFLICT)
+      .json({ error: "Player is already sold. Undo sale first." });
+
+  await prisma.$transaction([
+    prisma.unsoldPlayer.upsert({
+      where: {
+        auctionId_playerId: { auctionId: id, playerId: value.playerId },
+      },
+      create: { auctionId: id, playerId: value.playerId },
+      update: {},
+    }),
+    prisma.player.update({
+      where: { id: value.playerId },
+      data: { isUnsold: true },
+    }),
+  ]);
+
+  const nextPlayerId = await advanceStaticCurrentPlayer(id, value.playerId);
+
+  return res.status(StatusCodes.OK).json({
+    playerId: value.playerId,
+    status: "unsold",
+    currentPlayerId: nextPlayerId,
+  });
+}
+
+/** Static ledger: undo a sale and restore wallet. */
+export async function undoSale(
+  req: Request & { user?: { id: string; role: string } },
+  res: Response
+) {
+  const { id, playerId } = req.params;
+  if (await blockTestAuctionForNonSuperAdmin(req, res, id)) return;
+
+  const auction = await prisma.auction.findUnique({
+    where: { id },
+    select: { mode: true, state: true, createdById: true },
+  });
+  if (!auction)
+    return res.status(StatusCodes.NOT_FOUND).json({ error: "Auction not found" });
+  if (rejectIfNotStatic(res, auction.mode)) return;
+  if (await rejectIfNotStaticOwner(req, res, auction)) return;
+  if (auction.state === "completed")
+    return res
+      .status(StatusCodes.CONFLICT)
+      .json({ error: "Auction is completed" });
+
+  const sale = await prisma.sale.findUnique({
+    where: { auctionId_playerId: { auctionId: id, playerId } },
+  });
+  if (!sale)
+    return res.status(StatusCodes.NOT_FOUND).json({ error: "Sale not found" });
+
+  await prisma.$transaction([
+    prisma.team.update({
+      where: { id: sale.teamId },
+      data: { wallet: { increment: sale.price } },
+    }),
+    prisma.player.update({
+      where: { id: playerId },
+      data: { teamId: null },
+    }),
+    prisma.sale.delete({
+      where: { auctionId_playerId: { auctionId: id, playerId } },
+    }),
+  ]);
+
+  // Make undone player current so admin can re-enter
+  await prisma.auction.update({
+    where: { id },
+    data: { currentPlayerId: playerId },
+  });
+
+  return res.status(StatusCodes.OK).json({
+    playerId,
+    undone: true,
+    restoredAmount: sale.price,
+    currentPlayerId: playerId,
+  });
+}
+
+/** Static ledger: undo unsold mark. */
+export async function undoUnsold(
+  req: Request & { user?: { id: string; role: string } },
+  res: Response
+) {
+  const { id, playerId } = req.params;
+  if (await blockTestAuctionForNonSuperAdmin(req, res, id)) return;
+
+  const auction = await prisma.auction.findUnique({
+    where: { id },
+    select: { mode: true, state: true, createdById: true },
+  });
+  if (!auction)
+    return res.status(StatusCodes.NOT_FOUND).json({ error: "Auction not found" });
+  if (rejectIfNotStatic(res, auction.mode)) return;
+  if (await rejectIfNotStaticOwner(req, res, auction)) return;
+  if (auction.state === "completed")
+    return res
+      .status(StatusCodes.CONFLICT)
+      .json({ error: "Auction is completed" });
+
+  await prisma.$transaction([
+    prisma.unsoldPlayer.deleteMany({
+      where: { auctionId: id, playerId },
+    }),
+    prisma.player.update({
+      where: { id: playerId },
+      data: { isUnsold: false },
+    }),
+  ]);
+
+  await prisma.auction.update({
+    where: { id },
+    data: { currentPlayerId: playerId },
+  });
+
+  return res.status(StatusCodes.OK).json({
+    playerId,
+    undone: true,
+    currentPlayerId: playerId,
+  });
+}
+
+/** Static ledger: set which pending player is current (jump order). */
+export async function setStaticCurrentPlayer(
+  req: Request & { user?: { id: string; role: string } },
+  res: Response
+) {
+  const { id } = req.params;
+  if (await blockTestAuctionForNonSuperAdmin(req, res, id)) return;
+
+  const { error, value } = currentPlayerSchema.validate(req.body);
+  if (error)
+    return res.status(StatusCodes.BAD_REQUEST).json({ error: error.message });
+
+  const auction = await prisma.auction.findUnique({
+    where: { id },
+    select: { mode: true, state: true, createdById: true },
+  });
+  if (!auction)
+    return res.status(StatusCodes.NOT_FOUND).json({ error: "Auction not found" });
+  if (rejectIfNotStatic(res, auction.mode)) return;
+  if (await rejectIfNotStaticOwner(req, res, auction)) return;
+  if (auction.state === "completed")
+    return res
+      .status(StatusCodes.CONFLICT)
+      .json({ error: "Auction is completed" });
+
+  const ap = await prisma.auctionPlayer.findUnique({
+    where: {
+      auctionId_playerId: { auctionId: id, playerId: value.playerId },
+    },
+    include: { player: true },
+  });
+  if (!ap)
+    return res
+      .status(StatusCodes.BAD_REQUEST)
+      .json({ error: "Player is not part of this auction" });
+  if (ap.player.teamId)
+    return res
+      .status(StatusCodes.BAD_REQUEST)
+      .json({ error: "Cannot set a sold player as current" });
+
+  const updated = await prisma.auction.update({
+    where: { id },
+    data: { currentPlayerId: value.playerId },
+  });
+
+  return res.status(StatusCodes.OK).json({ auction: updated });
+}
+
+/** Static ledger: soft-complete without wiping data. */
+export async function completeStaticAuction(
+  req: Request & { user?: { id: string; role: string } },
+  res: Response
+) {
+  const { id } = req.params;
+  if (await blockTestAuctionForNonSuperAdmin(req, res, id)) return;
+
+  const auction = await prisma.auction.findUnique({
+    where: { id },
+    select: { mode: true, state: true, createdById: true },
+  });
+  if (!auction)
+    return res.status(StatusCodes.NOT_FOUND).json({ error: "Auction not found" });
+  if (rejectIfNotStatic(res, auction.mode)) return;
+  if (await rejectIfNotStaticOwner(req, res, auction)) return;
+
+  const updated = await prisma.auction.update({
+    where: { id },
+    data: { state: "completed", currentPlayerId: null },
+  });
+
+  return res.status(StatusCodes.OK).json({ auction: updated });
+}
+
+/** Static ledger: reopen a completed auction for corrections. */
+export async function reopenStaticAuction(
+  req: Request & { user?: { id: string; role: string } },
+  res: Response
+) {
+  const { id } = req.params;
+  if (await blockTestAuctionForNonSuperAdmin(req, res, id)) return;
+
+  const auction = await prisma.auction.findUnique({
+    where: { id },
+    select: { mode: true, state: true, createdById: true },
+  });
+  if (!auction)
+    return res.status(StatusCodes.NOT_FOUND).json({ error: "Auction not found" });
+  if (rejectIfNotStatic(res, auction.mode)) return;
+  if (await rejectIfNotStaticOwner(req, res, auction)) return;
+  if (auction.state !== "completed")
+    return res
+      .status(StatusCodes.CONFLICT)
+      .json({ error: "Auction is not completed" });
+
+  const nextPlayerId = await advanceStaticCurrentPlayer(id);
+  const updated = await prisma.auction.update({
+    where: { id },
+    data: { state: "active", currentPlayerId: nextPlayerId },
+  });
+
+  return res.status(StatusCodes.OK).json({ auction: updated });
+}
+
+/**
+ * Static ledger: permanently delete auction + related teams/players.
+ * Use after export when starting a fresh ledger.
+ */
+export async function deleteStaticAuction(
+  req: Request & { user?: { id: string; role: string } },
+  res: Response
+) {
+  const { id } = req.params;
+  if (await blockTestAuctionForNonSuperAdmin(req, res, id)) return;
+
+  const auction = await prisma.auction.findUnique({
+    where: { id },
+    include: {
+      teams: { select: { teamId: true } },
+      players: { select: { playerId: true } },
+    },
+  });
+  if (!auction)
+    return res.status(StatusCodes.NOT_FOUND).json({ error: "Auction not found" });
+  if (rejectIfNotStatic(res, auction.mode)) return;
+  if (await rejectIfNotStaticOwner(req, res, auction)) return;
+
+  const teamIds = auction.teams.map((t) => t.teamId);
+  const playerIds = auction.players.map((p) => p.playerId);
+
+  await prisma.$transaction(async (tx) => {
+    await tx.auction.delete({ where: { id } });
+    if (playerIds.length) {
+      await tx.player.deleteMany({ where: { id: { in: playerIds } } });
+    }
+    if (teamIds.length) {
+      await tx.team.deleteMany({ where: { id: { in: teamIds } } });
+    }
+  });
+
+  return res.status(StatusCodes.NO_CONTENT).send();
 }

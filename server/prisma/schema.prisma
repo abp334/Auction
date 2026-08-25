@@ -20,12 +20,18 @@ enum AuctionState {
   completed
 }
 
+enum AuctionMode {
+  live
+  static
+}
+
 model User {
   id               String    @id @default(uuid())
   email            String    @unique
   passwordHash     String
   name             String
   role             UserRole  @default(player)
+  auctionMode      AuctionMode @default(live)
   teamId           String?
   team             Team?     @relation("TeamMembers", fields: [teamId], references: [id], onDelete: SetNull)
   auctionId        String?
@@ -118,6 +124,7 @@ model Auction {
   timerEndsAt      DateTime?
   bidIncrement     Int          @default(1000)
   maxSquadSize     Int          @default(25)
+  mode             AuctionMode  @default(live)
   isTest           Boolean      @default(false)
   createdById      String?
   createdBy        User?        @relation("AuctionCreator", fields: [createdById], references: [id], onDelete: SetNull)
@@ -212,14 +219,15 @@ model SkippedTeam {
 }
 
 model InviteCode {
-  id        String    @id @default(uuid())
-  code      String    @unique
-  email     String?
-  used      Boolean   @default(false)
-  usedAt    DateTime?
-  usedBy    String?
-  expiresAt DateTime?
-  createdAt DateTime  @default(now())
+  id          String      @id @default(uuid())
+  code        String      @unique
+  email       String?
+  auctionMode AuctionMode @default(live)
+  used        Boolean     @default(false)
+  usedAt      DateTime?
+  usedBy      String?
+  expiresAt   DateTime?
+  createdAt   DateTime    @default(now())
 
   @@index([code])
   @@map("invite_codes")

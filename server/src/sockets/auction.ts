@@ -23,6 +23,21 @@ export function registerAuctionSocketHandlers(
       | { id: string; role: string }
       | undefined;
 
+    try {
+      const auctionMeta = await prisma.auction.findUnique({
+        where: { roomCode },
+        select: { id: true, mode: true },
+      });
+      if (auctionMeta?.mode === "static") {
+        socket.emit("error", {
+          message: "Static ledger auctions do not support live rooms.",
+        });
+        return;
+      }
+    } catch {
+      // continue; room may not exist yet
+    }
+
     // Captains and players may only join the auction they were added to.
     if (
       socketUser &&

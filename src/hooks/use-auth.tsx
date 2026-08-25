@@ -7,6 +7,7 @@ type User = {
   name: string;
   role: "admin" | "captain" | "player";
   teamId?: string;
+  auctionMode?: "live" | "static";
 };
 
 type LoginResult = {

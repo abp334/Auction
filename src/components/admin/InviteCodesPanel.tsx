@@ -12,11 +12,19 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { apiFetch } from "@/lib/api";
 import { Copy, Trash2, Plus, KeyRound } from "lucide-react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 type InviteCode = {
   id: string;
   code: string;
   email: string | null;
+  auctionMode?: "live" | "static";
   used: boolean;
   usedAt: string | null;
   usedBy: string | null;
@@ -30,6 +38,7 @@ const InviteCodesPanel = () => {
   const [isSuperAdmin, setIsSuperAdmin] = useState(false);
   const [email, setEmail] = useState("");
   const [expiresInDays, setExpiresInDays] = useState("30");
+  const [auctionMode, setAuctionMode] = useState<"live" | "static">("live");
   const [creating, setCreating] = useState(false);
 
   const { toast } = useToast();
@@ -53,7 +62,7 @@ const InviteCodesPanel = () => {
 
   const handleCreate = async () => {
     setCreating(true);
-    const body: Record<string, unknown> = {};
+    const body: Record<string, unknown> = { auctionMode };
     if (email.trim()) body.email = email.trim();
     if (expiresInDays) body.expiresInDays = parseInt(expiresInDays);
 
@@ -68,11 +77,12 @@ const InviteCodesPanel = () => {
         title: "Invite Code Created",
         description: newCode.email
           ? newCode.emailed
-            ? `Code ${newCode.code} emailed to ${newCode.email}.`
+            ? `Code ${newCode.code} (${newCode.auctionMode}) emailed to ${newCode.email}.`
             : `Code: ${newCode.code} (email not sent — check email settings).`
-          : `Code: ${newCode.code}`,
+          : `Code: ${newCode.code} · Mode: ${newCode.auctionMode}`,
       });
       setEmail("");
+      setAuctionMode("live");
       fetchCodes();
     } else {
       toast({
@@ -114,8 +124,9 @@ const InviteCodesPanel = () => {
           <CardTitle className="text-white">Invite Codes</CardTitle>
         </div>
         <CardDescription className="text-gray-400">
-          Generate invite codes for clients who have paid. Only you can see this
-          section.
+          Generate invite codes for clients who have paid. Choose Live
+          (multiplayer) or Static ledger (single-admin physical auction
+          companion). Only you can see this section.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
@@ -131,6 +142,21 @@ const InviteCodesPanel = () => {
               onChange={(e) => setEmail(e.target.value)}
               className="bg-white/10 border-white/20 text-white placeholder:text-gray-500"
             />
+          </div>
+          <div className="w-40 space-y-1">
+            <Label className="text-gray-300 text-xs">Feature</Label>
+            <Select
+              value={auctionMode}
+              onValueChange={(v) => setAuctionMode(v as "live" | "static")}
+            >
+              <SelectTrigger className="bg-white/10 border-white/20 text-white">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="live">Live multiplayer</SelectItem>
+                <SelectItem value="static">Static ledger</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
           <div className="w-32 space-y-1">
             <Label className="text-gray-300 text-xs">Expires (days)</Label>
@@ -175,6 +201,15 @@ const InviteCodesPanel = () => {
                     <code className="text-amber-400 font-mono font-bold text-sm">
                       {invite.code}
                     </code>
+                    <span
+                      className={`text-xs px-2 py-0.5 rounded-full ${
+                        invite.auctionMode === "static"
+                          ? "bg-emerald-500/20 text-emerald-400"
+                          : "bg-sky-500/20 text-sky-400"
+                      }`}
+                    >
+                      {invite.auctionMode === "static" ? "Static" : "Live"}
+                    </span>
                     {invite.used && (
                       <span className="text-xs bg-green-500/20 text-green-400 px-2 py-0.5 rounded-full">
                         Used

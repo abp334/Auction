@@ -1,6 +1,7 @@
 import { StatusCodes } from "http-status-codes";
 import type { Request, Response } from "express";
 import crypto from "crypto";
+import Joi from "joi";
 import prisma from "../utils/db.js";
 import { sendEmail, buildInviteEmailHtml, getAppUrl } from "../utils/email.js";
 
@@ -8,22 +9,31 @@ function generateCode(): string {
   return crypto.randomBytes(4).toString("hex").toUpperCase();
 }
 
+const createInviteSchema = Joi.object({
+  email: Joi.string().email().optional().allow(null, ""),
+  expiresInDays: Joi.number().integer().min(1).max(365).optional(),
+  auctionMode: Joi.string().valid("live", "static").default("live"),
+});
+
 export async function createInviteCode(
   req: Request & { user?: { id: string; role: string } },
   res: Response
 ) {
-  const { email, expiresInDays } = req.body;
+  const { error, value } = createInviteSchema.validate(req.body || {});
+  if (error)
+    return res.status(StatusCodes.BAD_REQUEST).json({ error: error.message });
 
   const code = generateCode();
-  const expiresAt = expiresInDays
-    ? new Date(Date.now() + expiresInDays * 24 * 60 * 60 * 1000)
+  const expiresAt = value.expiresInDays
+    ? new Date(Date.now() + value.expiresInDays * 24 * 60 * 60 * 1000)
     : null;
 
   const invite = await prisma.inviteCode.create({
     data: {
       code,
-      email: email || null,
+      email: value.email || null,
       expiresAt,
+      auctionMode: value.auctionMode,
     },
   });
 
@@ -34,8 +44,12 @@ export async function createInviteCode(
     const expiryText = expiresAt
       ? ` It expires on ${expiresAt.toDateString()}.`
       : "";
+    const modeText =
+      invite.auctionMode === "static"
+        ? " This code unlocks the static auction ledger (single-admin companion)."
+        : " This code unlocks live multiplayer auction control.";
     const text =
-      `Welcome to Clash Bid! Your invite code is ${code}.${expiryText} ` +
+      `Welcome to Clash Bid! Your invite code is ${code}.${expiryText}${modeText} ` +
       `Sign up at ${appUrl}/auth using this email address (${invite.email}) to create your organizer account.`;
     emailed = await sendEmail({
       to: invite.email,
@@ -50,6 +64,7 @@ export async function createInviteCode(
     id: invite.id,
     code: invite.code,
     email: invite.email,
+    auctionMode: invite.auctionMode,
     expiresAt: invite.expiresAt,
     emailed,
   });
@@ -80,6 +95,5 @@ export async function revokeInviteCode(
   }
 
   await prisma.inviteCode.delete({ where: { id } });
-
-  return res.status(StatusCodes.OK).json({ message: "Invite code revoked" });
+  return res.status(StatusCodes.NO_CONTENT).send();
 }

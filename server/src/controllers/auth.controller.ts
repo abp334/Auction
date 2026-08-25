@@ -196,15 +196,21 @@ export async function verifyOtp(req: Request, res: Response) {
   const rt = signRefreshToken({ sub: user.id });
   const rtHash = await hashRefreshToken(rt);
 
-  // Mark the invite code as used now that email is verified
+  // Mark the invite code as used and copy its auction mode onto the admin.
+  let auctionMode: "live" | "static" = user.auctionMode || "live";
   if (user.pendingInviteCode) {
+    const invite = await prisma.inviteCode.findUnique({
+      where: { code: user.pendingInviteCode },
+      select: { auctionMode: true },
+    });
+    if (invite?.auctionMode) auctionMode = invite.auctionMode;
     await prisma.inviteCode.update({
       where: { code: user.pendingInviteCode },
       data: { used: true, usedAt: new Date(), usedBy: user.email },
     });
   }
 
-  await prisma.user.update({
+  const updated = await prisma.user.update({
     where: { id: user.id },
     data: {
       emailVerified: true,
@@ -212,6 +218,7 @@ export async function verifyOtp(req: Request, res: Response) {
       otpHash: null,
       otpExpires: null,
       refreshTokenHash: rtHash,
+      auctionMode,
     },
   });
 
@@ -220,11 +227,12 @@ export async function verifyOtp(req: Request, res: Response) {
   return res.status(StatusCodes.OK).json({
     accessToken: at,
     user: {
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      role: user.role,
-      teamId: user.teamId,
+      id: updated.id,
+      email: updated.email,
+      name: updated.name,
+      role: updated.role,
+      teamId: updated.teamId,
+      auctionMode: updated.auctionMode,
     },
   });
 }
@@ -292,6 +300,7 @@ export async function login(req: Request, res: Response) {
       name: user.name,
       role: user.role,
       teamId: user.teamId,
+      auctionMode: user.auctionMode,
     },
   });
 }
@@ -343,6 +352,7 @@ export async function completePasswordReset(req: Request, res: Response) {
       name: user.name,
       role: user.role,
       teamId: user.teamId,
+      auctionMode: user.auctionMode,
     },
   });
 }
@@ -365,6 +375,7 @@ export async function me(
       name: user.name,
       role: user.role,
       teamId: user.teamId,
+      auctionMode: user.auctionMode,
     },
   });
 }
