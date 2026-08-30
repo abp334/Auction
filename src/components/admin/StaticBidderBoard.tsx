@@ -25,6 +25,7 @@ import {
   Shield,
   Tag,
   UserPlus,
+  Trophy,
   Users,
 } from "lucide-react";
 
@@ -108,6 +109,7 @@ type Props = {
     kind: "sale" | "unsold";
     detail: string;
   } | null;
+  commentary: string[];
   onUndoLast: () => void;
   onUndoPlayer: (playerId: string) => void;
   onSetCurrent: (playerId: string) => void;
@@ -306,63 +308,86 @@ function StaticBidderBoard(props: Props) {
 
         {props.currentPlayer ? (
           <div className="flex-1 min-h-0 flex flex-col lg:flex-row">
-            {/* Player panel */}
-            <div className="shrink-0 lg:w-[220px] xl:w-[240px] lg:border-r border-white/5 p-3 lg:p-4 flex lg:flex-col items-center lg:items-stretch gap-3">
-              <div className="flex items-center gap-3 lg:flex-col lg:gap-2 lg:text-center">
+            {/* Player + amount + commentary */}
+            <div className="shrink-0 lg:w-[240px] xl:w-[280px] lg:border-r border-white/5 p-3 lg:p-3 flex flex-col gap-2 lg:gap-2.5 lg:min-h-0 lg:overflow-hidden border-b lg:border-b-0 border-white/5">
+              <div className="flex items-center gap-3 lg:flex-col lg:gap-2 lg:text-center shrink-0">
                 {props.currentPlayer.photo ? (
                   <img
                     src={props.currentPlayer.photo}
                     alt=""
-                    className="w-16 h-16 lg:w-20 lg:h-20 rounded-full object-cover ring-2 ring-amber-500/60 shrink-0"
+                    className="w-16 h-16 lg:w-[72px] lg:h-[72px] rounded-full object-cover ring-2 ring-amber-500/60 shrink-0"
                   />
                 ) : (
-                  <div className="w-16 h-16 lg:w-20 lg:h-20 rounded-full bg-gradient-to-br from-slate-600 to-slate-800 flex items-center justify-center text-2xl font-bold text-white ring-2 ring-amber-500/60 shrink-0">
+                  <div className="w-16 h-16 lg:w-[72px] lg:h-[72px] rounded-full bg-gradient-to-br from-slate-600 to-slate-800 flex items-center justify-center text-2xl font-bold text-white ring-2 ring-amber-500/60 shrink-0">
                     {props.currentPlayer.name.charAt(0)}
                   </div>
                 )}
                 <div className="min-w-0 flex-1 lg:flex-none">
-                  <h3 className="text-lg lg:text-xl font-bold text-white truncate">
+                  <h3 className="text-lg font-bold text-white truncate">
                     {props.currentPlayer.name}
                   </h3>
-                  <div className="mt-1.5 lg:flex lg:justify-center">
-                    {playerTags}
-                  </div>
+                  <div className="mt-1 lg:flex lg:justify-center">{playerTags}</div>
                 </div>
               </div>
 
-              <div className="hidden lg:block rounded-lg border border-amber-500/25 bg-amber-950/20 px-3 py-2.5 text-center mt-auto">
+              <div className="rounded-lg border border-amber-500/25 bg-amber-950/20 px-3 py-2 text-center shrink-0">
                 <p className="text-[10px] uppercase tracking-wide text-amber-400/80">
                   Sale amount
                 </p>
-                <p className="text-2xl xl:text-3xl font-bold text-amber-400 tabular-nums leading-tight">
+                <p className="text-2xl font-bold text-amber-400 tabular-nums leading-tight">
                   {formatINR(displayAmount)}
                 </p>
-                <p className="text-[10px] text-gray-500 mt-1 truncate">
+                <p className="text-[10px] text-gray-500 mt-0.5 truncate">
                   {props.selectedTeamName
                     ? `→ ${props.selectedTeamName}`
                     : `Base ${formatINR(props.currentPlayer.basePrice)}`}
                 </p>
               </div>
+
+              <div className="hidden lg:flex flex-col flex-1 min-h-0 rounded-lg border border-amber-500/20 bg-[#0f1419]/80 overflow-hidden">
+                <h4 className="shrink-0 px-2.5 py-2 text-xs font-bold text-white flex items-center gap-1.5 border-b border-white/5">
+                  <Trophy className="w-3.5 h-3.5 text-amber-400" />
+                  Live Commentary
+                </h4>
+                <div className="flex-1 min-h-0 overflow-y-auto px-2.5 py-1.5 space-y-1">
+                  {props.commentary.map((line, i) => (
+                    <p
+                      key={`${line}-${i}`}
+                      className={`text-[11px] leading-snug border-b border-white/5 pb-1 ${
+                        i === 0 ? "text-white" : "text-white/75"
+                      }`}
+                    >
+                      {line}
+                    </p>
+                  ))}
+                </div>
+              </div>
             </div>
 
             {/* Actions panel */}
-            <div className="flex-1 min-h-0 flex flex-col p-3 lg:p-4 lg:justify-center gap-3 border-t lg:border-t-0 border-white/5">
-              {/* Mobile amount strip */}
-              <div className="lg:hidden rounded-lg border border-amber-500/25 bg-amber-950/20 px-4 py-2 text-center">
-                <p className="text-2xl font-bold text-amber-400 tabular-nums">
-                  {formatINR(displayAmount)}
-                </p>
-                <p className="text-xs text-gray-500">
-                  {props.selectedTeamName
-                    ? `Assign to ${props.selectedTeamName}`
-                    : `Base ${formatINR(props.currentPlayer.basePrice)}`}
-                </p>
-              </div>
-
+            <div className="flex-1 min-h-0 flex flex-col p-3 lg:p-4 lg:justify-center gap-3">
               {!props.completed && (
                 <>
-                  <div className="grid lg:grid-cols-[1fr_auto] gap-2 items-end">
-                    <div className="space-y-1.5">
+                  <div className="grid grid-cols-2 gap-2 items-end">
+                    <div className="space-y-1.5 min-w-0">
+                      <label className="text-[10px] uppercase tracking-wide text-amber-400/90 font-medium">
+                        Amount
+                      </label>
+                      <div className="relative">
+                        <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-sm">
+                          ₹
+                        </span>
+                        <Input
+                          type="number"
+                          value={props.amount}
+                          onChange={(e) =>
+                            props.onAmountChange(e.target.value)
+                          }
+                          className="pl-7 h-10 w-full bg-[#1a2332] border-white/10 text-white"
+                        />
+                      </div>
+                    </div>
+                    <div className="space-y-1.5 min-w-0">
                       <label className="text-[10px] uppercase tracking-wide text-amber-400/90 font-medium">
                         Winning team
                       </label>
@@ -370,7 +395,7 @@ function StaticBidderBoard(props: Props) {
                         value={props.selectedTeamId}
                         onValueChange={props.onSelectTeam}
                       >
-                        <SelectTrigger className="h-10 bg-[#1a2332] border-white/15 text-white text-sm">
+                        <SelectTrigger className="h-10 w-full bg-[#1a2332] border-white/15 text-white text-sm">
                           <SelectValue placeholder="Select team" />
                         </SelectTrigger>
                         <SelectContent>
@@ -381,24 +406,6 @@ function StaticBidderBoard(props: Props) {
                           ))}
                         </SelectContent>
                       </Select>
-                    </div>
-                    <div className="space-y-1.5">
-                      <label className="text-[10px] uppercase tracking-wide text-amber-400/90 font-medium">
-                        Amount
-                      </label>
-                      <div className="relative w-full lg:w-36">
-                        <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-sm">
-                          ₹
-                        </span>
-                        <Input
-                          type="number"
-                          value={props.amount}
-                          onChange={(e) =>
-                            props.onAmountChange(e.target.value)
-                          }
-                          className="pl-7 h-10 bg-[#1a2332] border-white/10 text-white"
-                        />
-                      </div>
                     </div>
                   </div>
 
@@ -457,6 +464,24 @@ function StaticBidderBoard(props: Props) {
                   )}
                 </>
               )}
+
+              {/* Mobile commentary */}
+              <div className="lg:hidden rounded-lg border border-amber-500/20 bg-[#0f1419]/80 overflow-hidden max-h-28">
+                <h4 className="px-2.5 py-1.5 text-xs font-bold text-white flex items-center gap-1.5 border-b border-white/5">
+                  <Trophy className="w-3.5 h-3.5 text-amber-400" />
+                  Commentary
+                </h4>
+                <div className="overflow-y-auto max-h-20 px-2.5 py-1 space-y-0.5">
+                  {props.commentary.map((line, i) => (
+                    <p
+                      key={`m-${line}-${i}`}
+                      className="text-[11px] text-white/85 border-b border-white/5 pb-0.5"
+                    >
+                      {line}
+                    </p>
+                  ))}
+                </div>
+              </div>
             </div>
 
             {/* Queue sidebar — desktop */}

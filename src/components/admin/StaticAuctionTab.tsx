@@ -54,6 +54,32 @@ type StagedPlayer = {
 
 const CSV_PREVIEW_LIMIT = 8;
 
+function buildCommentaryLines(
+  orderedPlayers: StaticAuctionDetail["players"],
+  saleByPlayer: Map<string, StaticAuctionDetail["sales"][number]>,
+  unsoldSet: Set<string>,
+  currentPlayerName?: string | null
+): string[] {
+  const lines: string[] = [];
+  for (const ap of orderedPlayers) {
+    const p = ap.player;
+    const sale = saleByPlayer.get(p.id);
+    if (sale) {
+      lines.push(
+        `SOLD · ${p.name} → ${sale.team.name} for ${formatINR(sale.price)}`
+      );
+    } else if (p.isUnsold || unsoldSet.has(p.id)) {
+      lines.push(`UNSOLD · ${p.name}`);
+    }
+  }
+  if (lines.length === 0) {
+    return currentPlayerName
+      ? [`Now auctioning: ${currentPlayerName}`]
+      : ["Ledger ready — record each sale from the floor."];
+  }
+  return lines.reverse();
+}
+
 const StaticAuctionTab = () => {
   const { toast } = useToast();
   const [auctionName, setAuctionName] = useState("");
@@ -218,6 +244,17 @@ const StaticAuctionTab = () => {
     }
     return null;
   }, [lastActionPlayerId, orderedPlayers, saleByPlayer, unsoldSet]);
+
+  const commentary = useMemo(
+    () =>
+      buildCommentaryLines(
+        orderedPlayers,
+        saleByPlayer,
+        unsoldSet,
+        currentPlayer?.name
+      ),
+    [orderedPlayers, saleByPlayer, unsoldSet, currentPlayer?.name]
+  );
 
   useEffect(() => {
     if (currentPlayer) {
@@ -848,6 +885,7 @@ const StaticAuctionTab = () => {
       onRegisterSale={registerSale}
       onRegisterUnsold={registerUnsold}
       undoTarget={undoTarget}
+      commentary={commentary}
       onUndoLast={handleUndoLast}
       onUndoPlayer={undoPlayer}
       onSetCurrent={setCurrent}
