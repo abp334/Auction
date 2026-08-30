@@ -156,7 +156,18 @@ export function buildInviteEmailHtml(opts: {
  * `html` is the fully branded body generated above. We also send `subject`,
  * `title`, `message` (plain-text fallback) and `otp` so both the new
  * pass-through template and the legacy template keep working.
+ *
+ * In non-production, verification codes are also written to server logs so
+ * local/Docker dev can read them via `docker compose logs -f server`.
  */
+function logDevVerificationCode(to: string, code: string, reason: string) {
+  if (process.env.NODE_ENV === "production" || !code) return;
+  logger.info(
+    { to, otp: code, reason },
+    `[DEV] Verification code for ${to}: ${code}`
+  );
+}
+
 export async function sendEmail(params: {
   to: string;
   subject: string;
@@ -197,19 +208,35 @@ export async function sendEmail(params: {
       if (!res.ok) {
         const errText = await res.text();
         logger.error({ status: res.status, errText }, "EmailJS send failed");
+        logDevVerificationCode(
+          params.to,
+          params.code || "",
+          "EmailJS send failed"
+        );
         return false;
       }
       logger.info({ to: params.to, subject: params.subject }, "Email sent");
+      logDevVerificationCode(params.to, params.code || "", "email sent");
       return true;
     } catch (err) {
       logger.error({ err }, "EmailJS network error");
+      logDevVerificationCode(
+        params.to,
+        params.code || "",
+        "EmailJS network error"
+      );
       return false;
     }
   }
 
   logger.warn(
     { to: params.to, subject: params.subject },
-    "EmailJS not configured — email logged to console"
+    "EmailJS not configured — verification code logged to server output (dev only)"
+  );
+  logDevVerificationCode(
+    params.to,
+    params.code || "",
+    "EmailJS not configured"
   );
   return false;
 }

@@ -87,7 +87,7 @@ const Auth = () => {
       if (result.ok) {
         toast({
           title: "Verification Sent",
-          description: "Check your email (or server console) for the OTP.",
+          description: "Check your email for the verification code.",
         });
         setShowOtp(true); // Switch UI to show OTP input
       } else {
@@ -331,8 +331,6 @@ const Auth = () => {
               <div className="space-y-4">
                 <div className="bg-amber-500/10 p-4 rounded text-sm text-amber-500 text-center">
                   We've sent a verification code to <strong>{email}</strong>.
-                  <br />
-                  (Check your server console if running locally)
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="otp">Verification Code</Label>
