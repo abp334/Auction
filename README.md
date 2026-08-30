@@ -1,220 +1,263 @@
 # ClashBid 🏏
 
-**ClashBid** is a high-performance, real-time cricket/sports auction platform designed for organizers to host seamless, interactive player auctions. Whether you are managing a local league, corporate tournament, or a large-scale event, ClashBid provides the administrative tools to import data, manage teams, track wallets, and execute live bidding with sub-second latency.
+**ClashBid** is a high-performance cricket/sports auction platform for organizers to import rosters, manage teams and wallets, and run auctions in two modes: **live multiplayer bidding** or a **static single-bidder ledger** for in-person events.
 
-Live Demo: **[clashbid.live](https://clashbid.live)**
+Live demo: **[clashbid.live](https://clashbid.live)**
 
 ---
 
 ## 🚀 Key Features
 
-### 🛠️ Admin Control Center
-* **Dynamic Setup**: Initialize an auction room by uploading CSV files for teams and players or by using the manual panels.
-* **Invite & User Management**: Generate secure invite codes to control who can sign up as admins or captains.
-* **Real-time Flow Control**: Start, pause, resume, or reset the auction timer. Admin controls when players go under the hammer.
-* **Squad & Wallet Validation**: Enforces squad limits (e.g., maximum squad size) and budget constraints dynamically.
-* **Test Auction Runner**: Execute automated simulated auctions to dry-run configuration and performance.
-* **Comprehensive Export**: Download detailed CSV reports of sold, unsold, and team-wise rosters after the auction ends.
+### Two auction modes
 
-### 🧢 Captain & Player Experience
-* **Room Code Access**: Join active auctions instantly using a unique 6-digit room code.
-* **Interactive Bidding**: Bid in real-time with dynamic bid increments automatically calculated based on the current player value.
-* **Bid Management**: Captains can request bid rollbacks (undo last bid) or pass/skip players.
-* **Live Roster & Wallet Tracking**: Live dashboards showing remaining wallet budget, current squad count, and full roster.
-* **Instant Dynamic Sync**: All data, timers, and bids sync across all connected clients in real-time.
+| Mode | Best for | How it works |
+|------|----------|--------------|
+| **Live** | Remote captains bidding in real time | Room code, Socket.io, timers, bid rollbacks |
+| **Static** | One admin calling sales at a physical event | CSV import, manual Sold/Unsold, wallet enforcement, live commentary, undo |
+
+Invite codes are tied to a mode at signup — admins get the dashboard that matches their invite (`live` or `static`).
+
+### Admin control center
+- **CSV import**: Upload teams and players from CSV (batched for large rosters — 150+ players supported).
+- **Invite & user management**: Super-admins generate invite codes; captains/players join via OTP signup.
+- **Live auction flow**: Start, pause, resume, reset timer; control when each player goes under the hammer.
+- **Static ledger**: Register sales/unsold, enforce purse and squad limits, undo last action, export reports.
+- **Test auction runner**: Simulated live auction to dry-run configuration.
+- **Export**: CSV reports for sold, unsold, and team-wise rosters.
+
+### Captain & player experience (live mode)
+- Join with a 6-digit room code.
+- Real-time bidding with dynamic increments.
+- Bid rollback requests and pass/skip.
+- Live wallet, squad count, and roster sync across all clients.
 
 ---
 
 ## 🛠️ Tech Stack
 
-### Frontend (SPA)
-* **Framework**: React 18 with TypeScript (bundled via Vite)
-* **Styling**: Tailwind CSS & Tailwind CSS Animate
-* **Components**: Radix UI primitives & shadcn/ui components (Dialogs, Tabs, Toasts, Cards, Resizable Panels)
-* **Real-time client**: Socket.io-client for bi-directional live communications
-* **State & Query Management**: TanStack React Query & Custom React Hooks
-* **Utility Libraries**: `zod` for frontend form validations, `lucide-react` for icons, `canvas-confetti` for auction wins
+### Frontend
+- React 18, TypeScript, Vite
+- Tailwind CSS, shadcn/ui (Radix)
+- TanStack React Query, Socket.io-client
+- `zod`, `lucide-react`, `canvas-confetti`
 
-### Backend (API & Real-time Server)
-* **Runtime & Framework**: Node.js, Express, and TypeScript (run via `tsx`)
-* **Database & ORM**: PostgreSQL, schema defined and queried using Prisma ORM
-* **Caching & Scaling**: Redis used as a high-speed store and Socket.IO Redis adapter for multi-instance horizontal scalability
-* **WebSocket Server**: Socket.io configured with Redis adapter, heartbeats, and custom reconnection rules
-* **Security & Auth**:
-  * JWT-based double token strategy (Access + Refresh tokens)
-  * CSRF Protection on authentication routes
-  * Rate-limiting on critical routes (e.g. general API, login/signup, and contact submissions)
-  * OTP Verification (using email templates / EmailJS integration)
+### Backend
+- Node.js, Express, TypeScript (`tsx` in dev)
+- PostgreSQL + Prisma ORM
+- Redis + Socket.io Redis adapter
+- JWT access/refresh tokens, CSRF on auth routes, rate limiting
+- OTP via EmailJS
+
+### Deployment (production)
+- **Frontend**: Vercel
+- **Backend**: Render (`server/render.yaml`)
+- **Database**: PostgreSQL (Supabase or self-hosted) — use pooled `DATABASE_URL` + direct `DIRECT_URL` for Prisma
 
 ---
 
 ## 📂 Project Structure
 
 ```
-├── .env.example             # Frontend environment variables template
-├── components.json          # shadcn/ui component configuration
-├── docker-compose.yml       # Docker services configuration (Postgres, Redis, Backend)
-├── eslint.config.js         # ESLint style guidelines configuration
-├── index.html               # Main single page entry point
-├── package.json             # Root dependencies & scripts
-├── postcss.config.js        # PostCSS configurations for Tailwind
-├── public/                  # Static assets and icons
-├── scripts/                 # Test suites & simulation scripts
-│   ├── production-smoke-test.ts
-│   └── test-auction-isolation.ts
-├── server/                  # Backend application folder
-│   ├── Dockerfile           # Backend container build configuration
-│   ├── package.json         # Backend dependencies & scripts
-│   ├── prisma/              # Prisma schema & migration configuration
-│   │   ├── migrations/
-│   │   └── schema.prisma
-│   ├── render.yaml          # Infrastructure blueprint for Render deployment
-│   ├── src/                 # Server source code
-│   │   ├── controllers/     # Request handlers & logic
-│   │   ├── index.ts         # Main server entrypoint
-│   │   ├── middleware/      # Error handler, auth & rate limit middlewares
-│   │   ├── routes/          # Express route declarations
-│   │   ├── sockets/         # Socket.io handlers for live bidding
-│   │   ├── types/           # TypeScript custom types
-│   │   └── utils/           # Database, Redis, logger & auth helper tools
-│   └── tsconfig.json
-├── src/                     # Frontend source code
-│   ├── App.css              # Custom scrollbars & overrides
-│   ├── App.tsx              # React router configuration
-│   ├── assets/              # Static frontend assets (images, logos)
-│   ├── components/          # Reusable UI components & layouts
-│   │   ├── admin/           # Panels for auction controls, invite codes, and users
-│   │   ├── auction/         # Interactive Live bidding interface
-│   │   └── ui/              # Atom level shadcn/ui primitives
-│   ├── hooks/               # Custom hooks (auth, socket, timer)
-│   ├── index.css            # Base Tailwind setup & CSS variables
-│   ├── lib/                 # Utility helpers (e.g. cn tailwind merge)
-│   ├── main.tsx             # React DOM entry mount point
-│   ├── pages/               # Main application pages
-│   └── tsconfig.json
-└── tsconfig.json            # Base TS configuration
+├── .env.example              # Frontend env template
+├── docker-compose.yml        # Full stack: postgres, redis, server, frontend
+├── docker-compose.dev.yml    # Hot-reload overrides for local dev
+├── Dockerfile.frontend       # Production frontend (Vite + nginx)
+├── Dockerfile.frontend.dev     # Dev frontend (Vite dev server)
+├── nginx/default.conf        # API + Socket.io proxy for Docker frontend
+├── samples/                  # Demo CSVs for static mode testing
+│   ├── demo_static_teams_10.csv
+│   └── demo_static_players_150.csv
+├── scripts/                  # Smoke & isolation tests
+├── server/                   # Express API + Socket.io
+│   ├── Dockerfile            # Production backend
+│   ├── Dockerfile.dev        # Dev backend with tsx watch
+│   ├── prisma/schema.prisma
+│   ├── render.yaml
+│   └── src/
+│       ├── controllers/      # Auction, auth, invite, team, player
+│       ├── routes/v1/
+│       ├── sockets/          # Live bidding handlers
+│       └── middleware/
+└── src/                      # React SPA
+    ├── components/
+    │   ├── admin/            # AuctionTab, StaticAuctionTab, StaticBidderBoard, …
+    │   └── auction/          # AuctionRoom (live)
+    ├── lib/                  # api.ts, static-auction-patch.ts, …
+    └── pages/
 ```
 
 ---
 
 ## ⚙️ Installation & Setup
 
-### 1. Prerequisites
-Ensure you have the following installed on your local machine:
-* **Node.js** (v20+ recommended)
-* **npm** or **Bun** package manager
-* **Docker & Docker Compose** (optional, recommended for easy setup of Postgres and Redis)
+### Prerequisites
+- **Node.js** v20+
+- **npm**
+- **Docker Desktop** (recommended — runs DB, Redis, API, and frontend together)
 
 ---
 
-### 2. Environment Setup
+### Option A — Docker (recommended)
 
-#### Backend configuration (`server/.env`)
-Create a `.env` file inside the `server/` directory based on the `server/.env.example` template:
+Runs **postgres**, **redis**, **backend**, and **frontend** in one command. No separate terminal windows or local DB install.
 
-| Environment Variable | Description | Default / Example |
-|---|---|---|
-| `DATABASE_URL` | PostgreSQL connection string (pooled) | `postgresql://bidarena:bidarena@localhost:5432/bidarena` |
-| `DIRECT_URL` | PostgreSQL direct connection string (unpooled) | `postgresql://bidarena:bidarena@localhost:5432/bidarena` |
-| `REDIS_URL` | Redis server connection string | `redis://localhost:6379` |
-| `PORT` | Local port backend server will run on | `5001` |
-| `CLIENT_ORIGIN` | Allowed CORS client origin | `http://localhost:8080` |
-| `JWT_ACCESS_SECRET` | Secret key used for signing JWT Access Tokens | *Choose a strong secret* |
-| `JWT_REFRESH_SECRET` | Secret key used for signing JWT Refresh Tokens | *Choose a strong secret* |
-| `EMAILJS_SERVICE_ID` | EmailJS Service ID for OTP emails | *Your EmailJS Service ID* |
-| `EMAILJS_TEMPLATE_ID` | EmailJS Template ID for OTP emails | *Your EmailJS Template ID* |
-| `EMAILJS_USER_ID` | EmailJS User Public Key | *Your EmailJS Public Key* |
-| `EMAILJS_PRIVATE_KEY` | EmailJS Private API Key | *Your EmailJS Private Key* |
-| `SIGNUP_BYPASS_CODE` | Code to bypass email/invite gates during local testing | `TESTBYPASS` |
-| `SUPER_ADMIN_EMAILS` | Comma-separated admin emails allowed to generate invites | `admin@example.com` |
+```bash
+# Production-like build (nginx serves the frontend)
+docker compose up --build
 
-#### Frontend configuration (`.env`)
-Create a `.env` file in the **root** folder based on the `.env.example` template:
+# Open the app
+open http://localhost:8080
+```
+
+**Hot reload** (edit `src/` or `server/src/` without rebuilding images):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+```
+
+**Stop and reset database volumes:**
+
+```bash
+docker compose down -v
+```
+
+| Service   | URL / port |
+|-----------|------------|
+| Frontend  | http://localhost:8080 |
+| API       | http://localhost:5001 |
+| Postgres  | localhost:5432 (`bidarena` / `bidarena`) |
+| Redis     | localhost:6379 |
+
+Docker Compose sets `SIGNUP_BYPASS_CODE=TESTBYPASS` on the server so you can sign up locally without EmailJS or a real invite code. Use **`TESTBYPASS`** during signup.
+
+To manage invite codes locally, add your email to `SUPER_ADMIN_EMAILS` in `docker-compose.yml` under the `server` service.
+
+---
+
+### Option B — Manual local development
+
+#### 1. Environment files
+
+**Backend** — copy `server/.env.example` → `server/.env`:
+
+| Variable | Description |
+|----------|-------------|
+| `DATABASE_URL` | PostgreSQL connection (pooled in prod) |
+| `DIRECT_URL` | Direct PostgreSQL URL (required for Prisma migrations) |
+| `REDIS_URL` | Redis connection |
+| `PORT` | Backend port (default `5001`) |
+| `CLIENT_ORIGIN` | Frontend origin for CORS (default `http://localhost:8080`) |
+| `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` | JWT signing secrets |
+| `EMAILJS_*` | OTP email delivery (optional locally) |
+| `SIGNUP_BYPASS_CODE` | Local signup shortcut (e.g. `TESTBYPASS`) |
+| `SUPER_ADMIN_EMAILS` | Comma-separated emails allowed to create invites |
+
+**Frontend** — copy `.env.example` → `.env`:
 
 ```env
-VITE_API_URL=http://localhost:5001/api/v1
+VITE_API_URL=/api/v1
 VITE_SERVER_URL=http://localhost:5001
 ```
 
----
+Vite proxies `/api` to `VITE_SERVER_URL` during `npm run dev`.
 
-### 3. Run with Docker Compose (Recommended)
-You can bring up all services (PostgreSQL, Redis, Backend Server) automatically using Docker:
+#### 2. Start databases only (via Docker)
 
 ```bash
-# Start all services in the background
-docker-compose up -d --build
+docker compose up postgres redis -d
 ```
-This automatically applies migrations (`npx prisma db push`) and starts the server on port `5001`.
 
----
+#### 3. Backend
 
-### 4. Manual Running for Local Development
-If you prefer running services manually:
-
-#### A. Run Databases
-Ensure PostgreSQL and Redis are running locally on their default ports (`5432` and `6379`). You can use docker-compose to run only the databases:
 ```bash
-docker-compose up postgres redis -d
+cd server
+npm install
+npx prisma db push
+npm run dev
 ```
 
-#### B. Setup & Run Backend
-1. Navigate to the server folder:
-   ```bash
-   cd server
-   ```
-2. Install dependencies:
-   ```bash
-   npm install
-   ```
-3. Generate Prisma client & apply database schema:
-   ```bash
-   npx prisma db push
-   # OR for standard migrations:
-   # npx prisma migrate dev
-   ```
-4. Start the backend development server (hot reload enabled):
-   ```bash
-   npm run dev
-   ```
+#### 4. Frontend (new terminal, project root)
 
-#### C. Setup & Run Frontend
-1. In a new terminal window, navigate to the project root:
-   ```bash
-   npm install
-   ```
-2. Start the Vite frontend application:
-   ```bash
-   npm run dev
-   ```
-3. Open your browser and navigate to `http://localhost:8080` (or the port specified in console output).
+```bash
+npm install
+npm run dev
+```
+
+Open **http://localhost:8080**.
 
 ---
 
-## 🛠️ Handy Development Scripts
+## 🧪 Sample data (static mode)
 
-### Database Operations (inside `server/` directory)
-* **Generate Client**: `npx prisma generate` (runs automatically during builds)
-* **Sync Schema**: `npm run db:push` (applies `schema.prisma` definitions straight to DB)
-* **Create Migrations**: `npm run db:migrate` (creates incremental SQL migration steps)
-* **Database UI**: `npm run db:studio` (opens a local graphical web editor to view and edit database rows)
+Ready-made CSVs in `samples/`:
 
-### Server Tests
-* **Smoke Testing**: Validate key APIs, socket behaviors, and server stability:
-  ```bash
-  cd server
-  npm run test:smoke
-  ```
+- `demo_static_teams_10.csv` — 10 teams, ₹10 cr purse each
+- `demo_static_players_150.csv` — 150 players in auction order
+
+Create a **static** invite (super-admin) or sign up with bypass code + static mode, then import these files from the admin dashboard.
 
 ---
 
-## 🔒 Security Auditing & Gating
-To prevent abuse, ClashBid includes:
-1. **Invite-Only Gating**: Only users possessing valid invite codes generated by a `SUPER_ADMIN` email can create rooms or participate.
-2. **Signup Bypass**: During testing, signups can bypass invites if they supply the code matching the backend `SIGNUP_BYPASS_CODE` env variable.
-3. **JWT Double Token auth**: Short-lived access tokens are verified against CSRF headers, with refresh tokens securely processed only on auth endpoints.
+## 🛠️ Development scripts
+
+### Frontend (root)
+
+| Command | Description |
+|---------|-------------|
+| `npm run dev` | Vite dev server on `:8080` |
+| `npm run build` | Production build to `dist/` |
+| `npm run preview` | Preview production build |
+
+### Backend (`server/`)
+
+| Command | Description |
+|---------|-------------|
+| `npm run dev` | `tsx watch` with hot reload |
+| `npm run build` | Compile TypeScript + Prisma generate |
+| `npm run start` | Run compiled `dist/index.js` |
+| `npm run db:push` | Apply `schema.prisma` to database |
+| `npm run db:migrate` | Create/apply migrations |
+| `npm run db:studio` | Prisma Studio GUI |
+| `npm run test:smoke` | Production API smoke tests |
+
+### Repo scripts (`scripts/`)
+
+| Script | Purpose |
+|--------|---------|
+| `scripts/production-smoke-test.ts` | End-to-end API checks |
+| `scripts/static-ledger-smoke.ts` | Static auction sell/undo/unsold flow |
+| `scripts/test-auction-isolation.ts` | Live auction isolation tests |
+
+Run from `server/` where noted in each script, or via `npx tsx ../scripts/...`.
+
+---
+
+## 🌐 Production deployment
+
+1. **Backend (Render)** — deploy `server/` using `render.yaml`. Set env vars from `server/.env.example`. Redeploy after pushing API changes (e.g. `/auctions/:id/static-board`).
+2. **Frontend (Vercel)** — deploy root; set `VITE_API_URL` to your Render API base (e.g. `https://your-api.onrender.com/api/v1`) and `VITE_SERVER_URL` to the same host for Socket.io.
+3. **Database** — Supabase PostgreSQL: `DATABASE_URL` = pooled (port 6543), `DIRECT_URL` = direct (port 5432).
+
+After deploy, verify the backend route exists:
+
+```bash
+curl -s -o /dev/null -w "%{http_code}" https://YOUR_API/health
+# Expect 200
+
+curl -s https://YOUR_API/api/v1/auctions/test/static-board
+# Expect auth error (401), not "Route not found"
+```
+
+---
+
+## 🔒 Security & gating
+
+1. **Invite-only signup** — Valid invite codes (generated by super-admin emails) gate who can register and which auction mode they receive.
+2. **Signup bypass** — For local/Docker testing, use the code matching `SIGNUP_BYPASS_CODE` (default `TESTBYPASS`).
+3. **JWT + CSRF** — Short-lived access tokens; refresh on auth routes only.
 
 ---
 
 ## 📄 License
-This project is proprietary. All rights reserved. Refer to local project owners or contact organizers at [subscription.clashbid@gmail.com](mailto:subscription.clashbid@gmail.com) for inquiries.
+
+This project is proprietary. All rights reserved. Contact [subscription.clashbid@gmail.com](mailto:subscription.clashbid@gmail.com) for inquiries.
