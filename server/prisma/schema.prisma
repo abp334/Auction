@@ -163,6 +163,7 @@ model AuctionPlayer {
   sortOrder Int     @default(0)
 
   @@id([auctionId, playerId])
+  @@index([auctionId, sortOrder])
   @@map("auction_players")
 }
 

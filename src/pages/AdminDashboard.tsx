@@ -34,11 +34,11 @@ const AdminDashboard = () => {
             />
             <div className="text-white">
               <h1 className="text-2xl font-bold">
-                {isStatic ? "Static Auction Ledger" : "Auction Control Center"}
+                {isStatic ? "Single Bidder Mode" : "Auction Control Center"}
               </h1>
               <p className="text-sm opacity-90">
                 Welcome, {user?.name || "Admin"}
-                {isStatic ? " · Physical auction companion" : ""}
+                {isStatic ? " · Admin auction companion" : ""}
               </p>
             </div>
           </div>

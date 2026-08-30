@@ -10,51 +10,26 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
-import {
-  Download,
-  FileSpreadsheet,
-  CheckCircle2,
-  XCircle,
-  Undo2,
-  ClipboardList,
-  Trophy,
-  Users,
-  Wallet,
-  TrendingUp,
-  FileText,
-} from "lucide-react";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { Download, FileSpreadsheet, ClipboardList } from "lucide-react";
 import { apiFetch } from "@/lib/api";
+import StaticBidderBoard from "@/components/admin/StaticBidderBoard";
 import { parseCSV, jsonToCSV } from "@/lib/utils";
 import {
   downloadAuctionCSV,
   downloadAuctionPDF,
   formatINR,
 } from "@/lib/auction-report";
+import {
+  patchAfterSale,
+  patchAfterUndoSale,
+  patchAfterUndoUnsold,
+  patchAfterUnsold,
+  patchAuctionState,
+  patchCurrentPlayer,
+  type StaticAuctionDetail,
+} from "@/lib/static-auction-patch";
 
-const TEAM_ACCENTS = [
-  "border-amber-500/40 bg-amber-500/10",
-  "border-sky-500/40 bg-sky-500/10",
-  "border-emerald-500/40 bg-emerald-500/10",
-  "border-violet-500/40 bg-violet-500/10",
-  "border-pink-500/40 bg-pink-500/10",
-  "border-teal-500/40 bg-teal-500/10",
-];
-
-const TEAM_BAR = [
-  "bg-amber-500",
-  "bg-sky-500",
-  "bg-emerald-500",
-  "bg-violet-500",
-  "bg-pink-500",
-  "bg-teal-500",
-];
+type AuctionDetail = StaticAuctionDetail;
 
 type StagedTeam = {
   name: string;
@@ -77,45 +52,6 @@ type StagedPlayer = {
   email?: string;
 };
 
-type AuctionDetail = {
-  id: string;
-  name: string;
-  state: string;
-  mode: string;
-  currentPlayerId: string | null;
-  maxSquadSize: number;
-  teams: Array<{
-    team: {
-      id: string;
-      name: string;
-      wallet: number;
-      captain?: string | null;
-      logo?: string | null;
-    };
-  }>;
-  players: Array<{
-    sortOrder: number;
-    player: {
-      id: string;
-      name: string;
-      role: string;
-      basePrice: number;
-      teamId: string | null;
-      isUnsold: boolean;
-      photo?: string | null;
-      age?: number | null;
-    };
-  }>;
-  sales: Array<{
-    playerId: string;
-    teamId: string;
-    price: number;
-    player: { name: string; role?: string };
-    team: { name: string };
-  }>;
-  unsoldPlayers: Array<{ playerId: string }>;
-};
-
 const StaticAuctionTab = () => {
   const { toast } = useToast();
   const [auctionName, setAuctionName] = useState("");
@@ -127,9 +63,11 @@ const StaticAuctionTab = () => {
 
   const [selectedTeamId, setSelectedTeamId] = useState("");
   const [amount, setAmount] = useState("");
+  const [showTeamsDialog, setShowTeamsDialog] = useState(false);
+  const [showQueue, setShowQueue] = useState(true);
 
   const loadAuction = useCallback(async (id: string) => {
-    const res = await apiFetch(`/auctions/${id}`);
+    const res = await apiFetch(`/auctions/${id}/static-board`);
     if (!res.ok) return null;
     const data = await res.json();
     return data.auction as AuctionDetail;
@@ -213,6 +151,45 @@ const StaticAuctionTab = () => {
   }, [auction, orderedPlayers]);
 
   const completed = auction?.state === "completed";
+
+  const selectedTeam = useMemo(
+    () => auction?.teams.find((t) => t.team.id === selectedTeamId)?.team,
+    [auction, selectedTeamId]
+  );
+
+  const amountNum = useMemo(() => {
+    const n = Math.round(Number(amount));
+    return Number.isFinite(n) && n >= 0 ? n : 0;
+  }, [amount]);
+
+  const addIncrement = (inc: number) => {
+    const base =
+      amountNum > 0 ? amountNum : Math.round(currentPlayer?.basePrice || 0);
+    setAmount(String(base + inc));
+  };
+
+  const handleUndoCurrent = async () => {
+    if (!auction || !currentPlayer) {
+      toast({
+        title: "Nothing to undo",
+        description: "Select a player with a recorded sale or unsold status.",
+        variant: "destructive",
+      });
+      return;
+    }
+    const sale = saleByPlayer.get(currentPlayer.id);
+    const isUnsold =
+      currentPlayer.isUnsold || unsoldSet.has(currentPlayer.id);
+    if (sale) await undoSale(currentPlayer.id);
+    else if (isUnsold) await undoUnsold(currentPlayer.id);
+    else {
+      toast({
+        title: "Nothing to undo",
+        description: "This player has no sale or unsold record yet.",
+        variant: "destructive",
+      });
+    }
+  };
 
   useEffect(() => {
     if (currentPlayer) {
@@ -411,12 +388,13 @@ const StaticAuctionTab = () => {
       });
       return;
     }
+    const data = await res.json();
+    setAuction((prev) => (prev ? patchAfterSale(prev, data) : prev));
     toast({
       title: "Sold",
       description: `${currentPlayer.name} sold for ${formatINR(amt)}`,
     });
     setSelectedTeamId("");
-    await refresh();
   };
 
   const registerUnsold = async () => {
@@ -436,8 +414,9 @@ const StaticAuctionTab = () => {
       });
       return;
     }
+    const data = await res.json();
+    setAuction((prev) => (prev ? patchAfterUnsold(prev, data) : prev));
     toast({ title: "Unsold", description: `${currentPlayer.name} marked unsold` });
-    await refresh();
   };
 
   const undoSale = async (playerId: string) => {
@@ -456,8 +435,9 @@ const StaticAuctionTab = () => {
       });
       return;
     }
+    const data = await res.json();
+    setAuction((prev) => (prev ? patchAfterUndoSale(prev, data) : prev));
     toast({ title: "Sale undone", description: "Purse restored." });
-    await refresh();
   };
 
   const undoUnsold = async (playerId: string) => {
@@ -476,8 +456,9 @@ const StaticAuctionTab = () => {
       });
       return;
     }
+    const data = await res.json();
+    setAuction((prev) => (prev ? patchAfterUndoUnsold(prev, data) : prev));
     toast({ title: "Unsold undone" });
-    await refresh();
   };
 
   const setCurrent = async (playerId: string) => {
@@ -495,7 +476,10 @@ const StaticAuctionTab = () => {
       });
       return;
     }
-    await refresh();
+    const data = await res.json();
+    setAuction((prev) =>
+      prev ? patchCurrentPlayer(prev, data.currentPlayerId, data.player) : prev
+    );
   };
 
   const completeAuction = async () => {
@@ -514,8 +498,10 @@ const StaticAuctionTab = () => {
       });
       return;
     }
+    setAuction((prev) =>
+      prev ? patchAuctionState(prev, "completed", null) : prev
+    );
     toast({ title: "Completed", description: "Ledger locked. Export still available. You can reopen or start a new one." });
-    await refresh();
   };
 
   const reopenAuction = async () => {
@@ -615,12 +601,11 @@ const StaticAuctionTab = () => {
         <CardHeader>
           <div className="flex items-center gap-2">
             <ClipboardList className="w-5 h-5 text-emerald-400" />
-            <CardTitle className="text-white">Static Auction Ledger</CardTitle>
+            <CardTitle className="text-white">Single Bidder Mode</CardTitle>
           </div>
           <CardDescription className="text-gray-400">
-            Single-admin companion for a physical auction. Upload teams and
-            players in CSV order, then register each sale. No multiplayer, no
-            timers.
+            Upload teams and players in CSV order, then record each sale on
+            behalf of all teams. No multiplayer, no timers.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
@@ -736,470 +721,46 @@ const StaticAuctionTab = () => {
     );
   }
 
-  // --- Session board ---
-  const progressPct =
-    summary.total > 0
-      ? Math.round(((summary.sold + summary.unsold) / summary.total) * 100)
-      : 0;
+  const currentPlayerSale = currentPlayer
+    ? saleByPlayer.get(currentPlayer.id)
+    : undefined;
 
   return (
-    <div className="space-y-5">
-      {/* Header */}
-      <div className="rounded-xl overflow-hidden border border-white/10">
-        <div className="bg-[#0f1419] px-5 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div>
-            <div className="flex items-center gap-2">
-              <Trophy className="w-5 h-5 text-amber-400" />
-              <h2 className="text-xl font-bold text-white">{auction.name}</h2>
-            </div>
-            <p className="text-sm text-amber-400/90 mt-1 tracking-wide uppercase">
-              Static ledger report · {completed ? "Completed" : "Live floor companion"}
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => exportReport("csv")}
-              disabled={loading}
-              className="bg-white/10 text-white border-white/20"
-            >
-              <FileSpreadsheet className="w-4 h-4 mr-1" /> CSV
-            </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => exportReport("pdf")}
-              disabled={loading}
-              className="bg-white/10 text-white border-white/20"
-            >
-              <FileText className="w-4 h-4 mr-1" /> PDF
-            </Button>
-            {!completed ? (
-              <Button
-                size="sm"
-                onClick={completeAuction}
-                disabled={loading}
-                className="bg-amber-500 hover:bg-amber-600 text-black font-semibold"
-              >
-                Complete
-              </Button>
-            ) : (
-              <>
-                <Button
-                  size="sm"
-                  onClick={reopenAuction}
-                  disabled={loading}
-                  className="bg-emerald-500 hover:bg-emerald-600 text-black"
-                >
-                  Reopen
-                </Button>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={startFresh}
-                  disabled={loading}
-                  className="bg-white/10 text-white border-white/20"
-                >
-                  New ledger
-                </Button>
-              </>
-            )}
-          </div>
-        </div>
-        <div className="h-1 bg-amber-500" />
-
-        {/* Summary stats */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 p-4 bg-[#1a2332]/80">
-          {[
-            {
-              label: "Sold",
-              value: String(summary.sold),
-              icon: CheckCircle2,
-              color: "text-emerald-400",
-            },
-            {
-              label: "Unsold",
-              value: String(summary.unsold),
-              icon: XCircle,
-              color: "text-red-400",
-            },
-            {
-              label: "Pending",
-              value: String(summary.pending),
-              icon: Users,
-              color: "text-sky-400",
-            },
-            {
-              label: "Total spent",
-              value: formatINR(summary.spent),
-              icon: Wallet,
-              color: "text-amber-400",
-            },
-          ].map((s) => (
-            <div
-              key={s.label}
-              className="rounded-lg bg-[#0f1419]/80 border border-white/10 px-3 py-3"
-            >
-              <div className="flex items-center gap-1.5 text-xs text-gray-400 uppercase tracking-wide">
-                <s.icon className={`w-3.5 h-3.5 ${s.color}`} />
-                {s.label}
-              </div>
-              <div className={`text-xl font-bold mt-1 ${s.color}`}>{s.value}</div>
-            </div>
-          ))}
-        </div>
-
-        {/* Progress + highest */}
-        <div className="px-4 pb-4 bg-[#1a2332]/80 space-y-2">
-          <div className="flex justify-between text-xs text-gray-400">
-            <span>Auction progress</span>
-            <span>
-              {summary.sold + summary.unsold}/{summary.total} · {progressPct}%
-            </span>
-          </div>
-          <div className="h-2 rounded-full bg-white/10 overflow-hidden flex">
-            <div
-              className="h-full bg-emerald-500 transition-all"
-              style={{
-                width: `${summary.total ? (summary.sold / summary.total) * 100 : 0}%`,
-              }}
-            />
-            <div
-              className="h-full bg-red-500/80 transition-all"
-              style={{
-                width: `${summary.total ? (summary.unsold / summary.total) * 100 : 0}%`,
-              }}
-            />
-          </div>
-          {summary.highest && (
-            <p className="text-sm text-gray-300 flex items-center gap-2 pt-1">
-              <TrendingUp className="w-4 h-4 text-emerald-400" />
-              Highest sale:{" "}
-              <span className="text-white font-semibold">
-                {summary.highest.player.name}
-              </span>{" "}
-              → {summary.highest.team.name} for{" "}
-              <span className="text-amber-400 font-semibold">
-                {formatINR(summary.highest.price)}
-              </span>
-            </p>
-          )}
-        </div>
-      </div>
-
-      <div className="grid lg:grid-cols-5 gap-4">
-        {/* Current player */}
-        <Card className="lg:col-span-3 border-amber-500/20 bg-[#1a2332]/60 backdrop-blur-sm">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-white text-lg flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
-              Current player
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {currentPlayer ? (
-              <>
-                <div className="flex gap-4 items-start p-4 rounded-xl bg-[#0f1419]/70 border border-white/10">
-                  {currentPlayer.photo ? (
-                    <img
-                      src={currentPlayer.photo}
-                      alt=""
-                      className="w-24 h-24 rounded-xl object-cover ring-2 ring-amber-500/40"
-                    />
-                  ) : (
-                    <div className="w-24 h-24 rounded-xl bg-gradient-to-br from-amber-500/30 to-amber-700/20 flex items-center justify-center text-3xl font-bold text-amber-200 ring-2 ring-amber-500/40">
-                      {currentPlayer.name.charAt(0)}
-                    </div>
-                  )}
-                  <div className="flex-1 min-w-0">
-                    <h3 className="text-2xl font-bold text-white truncate">
-                      {currentPlayer.name}
-                    </h3>
-                    <p className="text-gray-400 mt-1">
-                      {currentPlayer.role}
-                      {currentPlayer.age ? ` · Age ${currentPlayer.age}` : ""}
-                    </p>
-                    <div className="mt-3 inline-flex items-center gap-2 rounded-lg bg-amber-500/15 border border-amber-500/30 px-3 py-1.5">
-                      <span className="text-xs text-amber-200/80 uppercase tracking-wide">
-                        Base price
-                      </span>
-                      <span className="text-amber-400 font-bold">
-                        {formatINR(currentPlayer.basePrice)}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-
-                {!completed && (
-                  <div className="grid sm:grid-cols-3 gap-3 items-end">
-                    <div className="space-y-1">
-                      <Label className="text-gray-300 text-xs">Winning team</Label>
-                      <Select
-                        value={selectedTeamId}
-                        onValueChange={setSelectedTeamId}
-                      >
-                        <SelectTrigger className="bg-[#0f1419] border-white/20 text-white">
-                          <SelectValue placeholder="Select team" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {auction.teams.map((at) => (
-                            <SelectItem key={at.team.id} value={at.team.id}>
-                              {at.team.name} ({formatINR(at.team.wallet)})
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="space-y-1">
-                      <Label className="text-gray-300 text-xs">Hammer amount</Label>
-                      <Input
-                        type="number"
-                        value={amount}
-                        onChange={(e) => setAmount(e.target.value)}
-                        className="bg-[#0f1419] border-white/20 text-white"
-                      />
-                    </div>
-                    <div className="flex gap-2">
-                      <Button
-                        onClick={registerSale}
-                        disabled={loading}
-                        className="flex-1 bg-emerald-500 hover:bg-emerald-600 text-black font-semibold"
-                      >
-                        <CheckCircle2 className="w-4 h-4 mr-1" /> Sell
-                      </Button>
-                      <Button
-                        onClick={registerUnsold}
-                        disabled={loading}
-                        variant="secondary"
-                        className="bg-white/10 text-white border-white/20"
-                      >
-                        <XCircle className="w-4 h-4 mr-1" /> Unsold
-                      </Button>
-                    </div>
-                  </div>
-                )}
-              </>
-            ) : (
-              <p className="text-gray-400 py-6 text-center">
-                {completed
-                  ? "Auction completed — export PDF for full rosters & charts."
-                  : "No pending players left — export or complete."}
-              </p>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Spending chart */}
-        <Card className="lg:col-span-2 border-white/10 bg-[#1a2332]/60">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-white text-lg">Team spending</CardTitle>
-            <CardDescription className="text-gray-400">
-              Purse used vs remaining
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3 max-h-72 overflow-y-auto">
-            {auction.teams.map((at, i) => {
-              const roster = rosterByTeam.get(at.team.id) || [];
-              const spent = roster.reduce((s, x) => s + x.price, 0);
-              const width = Math.max((spent / maxTeamSpent) * 100, spent > 0 ? 4 : 0);
-              return (
-                <div key={at.team.id}>
-                  <div className="flex justify-between text-xs mb-1">
-                    <span className="text-white font-medium truncate pr-2">
-                      {at.team.name}
-                    </span>
-                    <span className="text-amber-400 shrink-0">{formatINR(spent)}</span>
-                  </div>
-                  <div className="h-2 rounded-full bg-white/10 overflow-hidden">
-                    <div
-                      className={`h-full rounded-full ${TEAM_BAR[i % TEAM_BAR.length]}`}
-                      style={{ width: `${width}%` }}
-                    />
-                  </div>
-                  <div className="text-[11px] text-gray-500 mt-0.5">
-                    {roster.length} players · purse left {formatINR(at.team.wallet)}
-                  </div>
-                </div>
-              );
-            })}
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Team rosters */}
-      <div>
-        <h3 className="text-white font-semibold mb-3 flex items-center gap-2">
-          <Users className="w-4 h-4 text-amber-400" />
-          Team rosters
-        </h3>
-        <div className="grid sm:grid-cols-2 gap-3">
-          {auction.teams.map((at, i) => {
-            const roster = rosterByTeam.get(at.team.id) || [];
-            const spent = roster.reduce((s, x) => s + x.price, 0);
-            const selected = selectedTeamId === at.team.id;
-            return (
-              <div
-                key={at.team.id}
-                className={`rounded-xl border p-4 transition ${
-                  selected
-                    ? "border-amber-500/50 bg-amber-500/10"
-                    : `${TEAM_ACCENTS[i % TEAM_ACCENTS.length]}`
-                }`}
-              >
-                <button
-                  type="button"
-                  className="w-full text-left"
-                  disabled={completed || !currentPlayer}
-                  onClick={() => setSelectedTeamId(at.team.id)}
-                >
-                  <div className="flex justify-between items-start gap-2">
-                    <div>
-                      <div className="text-white font-semibold">{at.team.name}</div>
-                      <div className="text-xs text-gray-400 mt-0.5">
-                        {at.team.captain ? `Captain: ${at.team.captain}` : "No captain"}
-                      </div>
-                    </div>
-                    <div className="text-right text-xs">
-                      <div className="text-amber-400 font-semibold">
-                        {formatINR(spent)} spent
-                      </div>
-                      <div className="text-gray-400">
-                        {formatINR(at.team.wallet)} left
-                      </div>
-                    </div>
-                  </div>
-                  <div className="text-xs text-gray-400 mt-2">
-                    Squad {roster.length}/{auction.maxSquadSize || 25}
-                    {selected && !completed ? " · selected for sell" : ""}
-                  </div>
-                </button>
-                <ul className="mt-3 space-y-1.5 max-h-40 overflow-y-auto">
-                  {roster.length === 0 ? (
-                    <li className="text-xs text-gray-500 italic">No players yet</li>
-                  ) : (
-                    roster.map((s) => (
-                      <li
-                        key={s.playerId}
-                        className="flex items-center justify-between gap-2 text-sm rounded-md bg-[#0f1419]/50 px-2 py-1.5"
-                      >
-                        <span className="text-white truncate">
-                          {s.player.name}
-                          <span className="text-gray-500 text-xs ml-1">
-                            {s.player.role || ""}
-                          </span>
-                        </span>
-                        <span className="flex items-center gap-1 shrink-0">
-                          <span className="text-emerald-400 text-xs font-semibold">
-                            {formatINR(s.price)}
-                          </span>
-                          {!completed && (
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              className="h-6 w-6 p-0 text-gray-500 hover:text-white"
-                              onClick={() => undoSale(s.playerId)}
-                            >
-                              <Undo2 className="w-3 h-3" />
-                            </Button>
-                          )}
-                        </span>
-                      </li>
-                    ))
-                  )}
-                </ul>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Player queue */}
-      <Card className="border-white/10 bg-[#1a2332]/60">
-        <CardHeader className="pb-2">
-          <CardTitle className="text-white text-lg">
-            Player queue (CSV order)
-          </CardTitle>
-          <CardDescription className="text-gray-400">
-            Click a pending player to jump order. Undo sold/unsold anytime.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-1 max-h-96 overflow-y-auto">
-            {orderedPlayers.map((ap, idx) => {
-              const p = ap.player;
-              const sale = saleByPlayer.get(p.id);
-              const isUnsold = p.isUnsold || unsoldSet.has(p.id);
-              const isCurrent = auction.currentPlayerId === p.id;
-              const isPending = !sale && !isUnsold;
-
-              return (
-                <div
-                  key={p.id}
-                  className={`flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg border ${
-                    isCurrent
-                      ? "border-amber-500/50 bg-amber-500/10"
-                      : sale
-                        ? "border-emerald-500/20 bg-emerald-500/5"
-                        : isUnsold
-                          ? "border-red-500/20 bg-red-500/5"
-                          : "border-transparent hover:bg-white/5"
-                  }`}
-                >
-                  <button
-                    type="button"
-                    className="flex-1 text-left min-w-0"
-                    disabled={completed || !isPending}
-                    onClick={() => isPending && setCurrent(p.id)}
-                  >
-                    <span className="text-gray-500 text-xs mr-2 tabular-nums">
-                      {idx + 1}.
-                    </span>
-                    <span className="text-white font-medium">{p.name}</span>
-                    <span className="text-gray-500 text-sm ml-2">{p.role}</span>
-                    {isCurrent && (
-                      <span className="ml-2 text-[10px] uppercase tracking-wide text-amber-400 font-semibold">
-                        Current
-                      </span>
-                    )}
-                    {sale && (
-                      <span className="ml-2 text-xs text-emerald-300">
-                        Sold → {sale.team.name} @ {formatINR(sale.price)}
-                      </span>
-                    )}
-                    {isUnsold && !sale && (
-                      <span className="ml-2 text-xs text-red-400 uppercase tracking-wide">
-                        Unsold
-                      </span>
-                    )}
-                  </button>
-                  {!completed && sale && (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => undoSale(p.id)}
-                      className="text-gray-400 hover:text-white"
-                    >
-                      <Undo2 className="w-4 h-4" />
-                    </Button>
-                  )}
-                  {!completed && isUnsold && !sale && (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => undoUnsold(p.id)}
-                      className="text-gray-400 hover:text-white"
-                    >
-                      <Undo2 className="w-4 h-4" />
-                    </Button>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </CardContent>
-      </Card>
-    </div>
+    <StaticBidderBoard
+      auctionName={auction.name}
+      completed={completed}
+      loading={loading}
+      summary={summary}
+      currentPlayer={currentPlayer}
+      amount={amount}
+      amountNum={amountNum}
+      selectedTeamId={selectedTeamId}
+      selectedTeamName={selectedTeam?.name}
+      currentPlayerSale={currentPlayerSale}
+      teams={auction.teams}
+      maxSquadSize={auction.maxSquadSize}
+      rosterByTeam={rosterByTeam}
+      maxTeamSpent={maxTeamSpent}
+      orderedPlayers={orderedPlayers}
+      saleByPlayer={saleByPlayer}
+      unsoldSet={unsoldSet}
+      currentPlayerId={auction.currentPlayerId}
+      showTeamsDialog={showTeamsDialog}
+      showQueue={showQueue}
+      onAmountChange={setAmount}
+      onAddIncrement={addIncrement}
+      onSelectTeam={setSelectedTeamId}
+      onRegisterSale={registerSale}
+      onRegisterUnsold={registerUnsold}
+      onUndoCurrent={handleUndoCurrent}
+      onSetCurrent={setCurrent}
+      onExport={exportReport}
+      onComplete={completeAuction}
+      onReopen={reopenAuction}
+      onStartFresh={startFresh}
+      onShowTeamsDialog={setShowTeamsDialog}
+      onShowQueue={setShowQueue}
+    />
   );
 };
 

@@ -9,6 +9,7 @@ import {
   startAuction,
   getAuction,
   getAuctionLive,
+  getAuctionStaticBoard,
   getAuctionReport,
   pauseAuction,
   resumeAuction,
@@ -36,6 +37,7 @@ router.post(
   seedTestAuction
 );
 router.get("/:id/live", requireAuth, getAuctionLive);
+router.get("/:id/static-board", requireAuth, getAuctionStaticBoard);
 router.get("/:id", requireAuth, getAuction);
 router.post("/", requireAuth, requireRoles(["admin"]), createAuction);
 router.post("/:id/start", requireAuth, requireRoles(["admin"]), startAuction);
