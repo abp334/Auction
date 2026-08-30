@@ -20,9 +20,9 @@ const AdminDashboard = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-[#1a2332] to-[#0f1419]">
-      <header className="border-b border-white/10 bg-white/5 backdrop-blur-sm">
-        <div className="container mx-auto px-4 py-4 flex items-center justify-between">
+    <div className="min-h-screen bg-gradient-to-br from-[#1a2332] to-[#0f1419] flex flex-col">
+      <header className="border-b border-white/10 bg-white/5 backdrop-blur-sm shrink-0">
+        <div className="container mx-auto px-4 py-3 lg:py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <img
               src={logo}
@@ -33,19 +33,20 @@ const AdminDashboard = () => {
               }}
             />
             <div className="text-white">
-              <h1 className="text-2xl font-bold">
+              <h1 className="text-lg lg:text-xl font-bold">
                 {isStatic ? "Single Bidder Mode" : "Auction Control Center"}
               </h1>
-              <p className="text-sm opacity-90">
-                Welcome, {user?.name || "Admin"}
-                {isStatic ? " · Admin auction companion" : ""}
-              </p>
+              {!isStatic && (
+                <p className="text-sm opacity-90">
+                  Welcome, {user?.name || "Admin"}
+                </p>
+              )}
             </div>
           </div>
           <Button
             variant="secondary"
             onClick={handleLogout}
-            className="bg-white/10 hover:bg-white/20 text-white border-white/20"
+            className="bg-white/10 hover:bg-white/20 text-white border-white/20 h-9"
           >
             <LogOut className="w-4 h-4 mr-2" />
             Logout
@@ -53,12 +54,20 @@ const AdminDashboard = () => {
         </div>
       </header>
 
-      <main className="container mx-auto px-4 py-8">
-        <div className="max-w-5xl mx-auto">
+      <main
+        className={`container mx-auto px-3 lg:px-4 flex-1 min-h-0 flex flex-col ${
+          isStatic ? "py-2 lg:py-3" : "py-8"
+        }`}
+      >
+        <div
+          className={`mx-auto w-full flex-1 min-h-0 flex flex-col ${
+            isStatic ? "max-w-[1400px]" : "max-w-5xl"
+          }`}
+        >
           {isStatic ? <StaticAuctionTab /> : <AuctionTab />}
           {!isStatic && <TestAuctionPanel />}
-          <UserManagementPanel />
-          <InviteCodesPanel />
+          {!isStatic && <UserManagementPanel />}
+          {!isStatic && <InviteCodesPanel />}
         </div>
       </main>
     </div>

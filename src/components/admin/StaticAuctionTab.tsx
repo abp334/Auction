@@ -52,6 +52,8 @@ type StagedPlayer = {
   email?: string;
 };
 
+const CSV_PREVIEW_LIMIT = 8;
+
 const StaticAuctionTab = () => {
   const { toast } = useToast();
   const [auctionName, setAuctionName] = useState("");
@@ -59,18 +61,34 @@ const StaticAuctionTab = () => {
   const [teamsData, setTeamsData] = useState<StagedTeam[]>([]);
   const [playersData, setPlayersData] = useState<StagedPlayer[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadingMessage, setLoadingMessage] = useState("");
   const [auction, setAuction] = useState<AuctionDetail | null>(null);
 
   const [selectedTeamId, setSelectedTeamId] = useState("");
   const [amount, setAmount] = useState("");
   const [showTeamsDialog, setShowTeamsDialog] = useState(false);
   const [showQueue, setShowQueue] = useState(true);
+  /** Tracks the most recently sold/unsold player for Undo Last. */
+  const [lastActionPlayerId, setLastActionPlayerId] = useState<string | null>(
+    null
+  );
 
   const loadAuction = useCallback(async (id: string) => {
-    const res = await apiFetch(`/auctions/${id}/static-board`);
-    if (!res.ok) return null;
-    const data = await res.json();
-    return data.auction as AuctionDetail;
+    const boardRes = await apiFetch(`/auctions/${id}/static-board`);
+    if (boardRes.ok) {
+      const data = await boardRes.json();
+      return data.auction as AuctionDetail;
+    }
+
+    // Fallback for servers not yet deployed with /static-board
+    if (boardRes.status === 404) {
+      const res = await apiFetch(`/auctions/${id}`);
+      if (!res.ok) return null;
+      const data = await res.json();
+      return data.auction as AuctionDetail;
+    }
+
+    return null;
   }, []);
 
   useEffect(() => {
@@ -168,28 +186,38 @@ const StaticAuctionTab = () => {
     setAmount(String(base + inc));
   };
 
-  const handleUndoCurrent = async () => {
-    if (!auction || !currentPlayer) {
-      toast({
-        title: "Nothing to undo",
-        description: "Select a player with a recorded sale or unsold status.",
-        variant: "destructive",
-      });
-      return;
+  const undoTarget = useMemo(() => {
+    const resolve = (playerId: string) => {
+      const row = orderedPlayers.find((ap) => ap.player.id === playerId);
+      if (!row) return null;
+      const p = row.player;
+      const sale = saleByPlayer.get(playerId);
+      const isUnsold = p.isUnsold || unsoldSet.has(playerId);
+      if (sale) {
+        return {
+          playerId,
+          name: p.name,
+          kind: "sale" as const,
+          detail: `${sale.team.name} · ${formatINR(sale.price)}`,
+        };
+      }
+      if (isUnsold) {
+        return { playerId, name: p.name, kind: "unsold" as const, detail: "" };
+      }
+      return null;
+    };
+
+    if (lastActionPlayerId) {
+      const recent = resolve(lastActionPlayerId);
+      if (recent) return recent;
     }
-    const sale = saleByPlayer.get(currentPlayer.id);
-    const isUnsold =
-      currentPlayer.isUnsold || unsoldSet.has(currentPlayer.id);
-    if (sale) await undoSale(currentPlayer.id);
-    else if (isUnsold) await undoUnsold(currentPlayer.id);
-    else {
-      toast({
-        title: "Nothing to undo",
-        description: "This player has no sale or unsold record yet.",
-        variant: "destructive",
-      });
+
+    for (let i = orderedPlayers.length - 1; i >= 0; i--) {
+      const hit = resolve(orderedPlayers[i].player.id);
+      if (hit) return hit;
     }
-  };
+    return null;
+  }, [lastActionPlayerId, orderedPlayers, saleByPlayer, unsoldSet]);
 
   useEffect(() => {
     if (currentPlayer) {
@@ -314,35 +342,50 @@ const StaticAuctionTab = () => {
       return;
     }
     setLoading(true);
-    const res = await apiFetch("/auctions", {
-      method: "POST",
-      body: JSON.stringify({
-        name: auctionName,
-        mode: "static",
-        maxSquadSize: Number(maxSquadSize) || 25,
-        teams: teamsData,
-        players: playersData,
-      }),
-    });
-    setLoading(false);
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      toast({
-        title: "Create failed",
-        description: err.error || "Could not create static auction.",
-        variant: "destructive",
+    setLoadingMessage(
+      `Importing ${playersData.length} players and ${teamsData.length} teams…`
+    );
+    try {
+      const res = await apiFetch("/auctions", {
+        method: "POST",
+        body: JSON.stringify({
+          name: auctionName,
+          mode: "static",
+          maxSquadSize: Number(maxSquadSize) || 25,
+          teams: teamsData,
+          players: playersData,
+        }),
       });
-      return;
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        toast({
+          title: "Create failed",
+          description: err.error || "Could not create static auction.",
+          variant: "destructive",
+        });
+        return;
+      }
+      setLoadingMessage("Loading auction board…");
+      const data = await res.json();
+      const full = await loadAuction(data.auction.id);
+      if (full) {
+        setAuction(full);
+        setTeamsData([]);
+        setPlayersData([]);
+        setAuctionName("");
+        toast({ title: "Ledger ready", description: data.message });
+      } else {
+        toast({
+          title: "Ledger created but could not load",
+          description:
+            "Refresh the page. If it persists, redeploy the backend on Render.",
+          variant: "destructive",
+        });
+      }
+    } finally {
+      setLoading(false);
+      setLoadingMessage("");
     }
-    const data = await res.json();
-    const full = await loadAuction(data.auction.id);
-    if (full) {
-      setAuction(full);
-      setTeamsData([]);
-      setPlayersData([]);
-      setAuctionName("");
-    }
-    toast({ title: "Ledger ready", description: data.message });
   };
 
   const refresh = async () => {
@@ -389,6 +432,7 @@ const StaticAuctionTab = () => {
       return;
     }
     const data = await res.json();
+    setLastActionPlayerId(currentPlayer.id);
     setAuction((prev) => (prev ? patchAfterSale(prev, data) : prev));
     toast({
       title: "Sold",
@@ -415,6 +459,7 @@ const StaticAuctionTab = () => {
       return;
     }
     const data = await res.json();
+    setLastActionPlayerId(currentPlayer.id);
     setAuction((prev) => (prev ? patchAfterUnsold(prev, data) : prev));
     toast({ title: "Unsold", description: `${currentPlayer.name} marked unsold` });
   };
@@ -459,6 +504,38 @@ const StaticAuctionTab = () => {
     const data = await res.json();
     setAuction((prev) => (prev ? patchAfterUndoUnsold(prev, data) : prev));
     toast({ title: "Unsold undone" });
+  };
+
+  const undoPlayer = async (playerId: string) => {
+    if (!auction) return;
+    const sale = saleByPlayer.get(playerId);
+    const row = orderedPlayers.find((ap) => ap.player.id === playerId);
+    const isUnsold =
+      row &&
+      (row.player.isUnsold || unsoldSet.has(playerId));
+    if (sale) await undoSale(playerId);
+    else if (isUnsold) await undoUnsold(playerId);
+    else {
+      toast({
+        title: "Nothing to undo",
+        description: "This player has no sale or unsold record.",
+        variant: "destructive",
+      });
+      return;
+    }
+    setLastActionPlayerId((prev) => (prev === playerId ? null : prev));
+  };
+
+  const handleUndoLast = async () => {
+    if (!undoTarget) {
+      toast({
+        title: "Nothing to undo",
+        description: "Record a sale or unsold first.",
+        variant: "destructive",
+      });
+      return;
+    }
+    await undoPlayer(undoTarget.playerId);
   };
 
   const setCurrent = async (playerId: string) => {
@@ -650,11 +727,16 @@ const StaticAuctionTab = () => {
                 className="bg-white/10 border-white/20 text-white file:text-white"
               />
               <ul className="text-sm text-gray-400 max-h-32 overflow-y-auto space-y-1">
-                {teamsData.map((t, i) => (
+                {teamsData.slice(0, CSV_PREVIEW_LIMIT).map((t, i) => (
                   <li key={`${t.name}-${i}`}>
                     {t.name} · {formatINR(t.wallet)}
                   </li>
                 ))}
+                {teamsData.length > CSV_PREVIEW_LIMIT && (
+                  <li className="text-gray-500 italic">
+                    … and {teamsData.length - CSV_PREVIEW_LIMIT} more teams
+                  </li>
+                )}
               </ul>
               {teamsData.length > 0 && (
                 <Button
@@ -689,11 +771,16 @@ const StaticAuctionTab = () => {
                 className="bg-white/10 border-white/20 text-white file:text-white"
               />
               <ul className="text-sm text-gray-400 max-h-32 overflow-y-auto space-y-1">
-                {playersData.map((p, i) => (
+                {playersData.slice(0, CSV_PREVIEW_LIMIT).map((p, i) => (
                   <li key={`${p.name}-${i}`}>
                     {i + 1}. {p.name} · {p.role} · {formatINR(p.basePrice)}
                   </li>
                 ))}
+                {playersData.length > CSV_PREVIEW_LIMIT && (
+                  <li className="text-gray-500 italic">
+                    … and {playersData.length - CSV_PREVIEW_LIMIT} more players
+                  </li>
+                )}
               </ul>
               {playersData.length > 0 && (
                 <Button
@@ -714,8 +801,15 @@ const StaticAuctionTab = () => {
             className="bg-emerald-500 hover:bg-emerald-600 text-black font-semibold"
           >
             <FileSpreadsheet className="w-4 h-4 mr-2" />
-            {loading ? "Creating…" : "Start ledger"}
+            {loading
+              ? loadingMessage || "Creating…"
+              : "Start ledger"}
           </Button>
+          {loading && playersData.length > 50 && (
+            <p className="text-xs text-gray-400">
+              Large imports can take 1–2 minutes on the server — please wait.
+            </p>
+          )}
         </CardContent>
       </Card>
     );
@@ -726,7 +820,8 @@ const StaticAuctionTab = () => {
     : undefined;
 
   return (
-    <StaticBidderBoard
+    <div className="flex-1 min-h-0 w-full flex flex-col">
+      <StaticBidderBoard
       auctionName={auction.name}
       completed={completed}
       loading={loading}
@@ -752,7 +847,9 @@ const StaticAuctionTab = () => {
       onSelectTeam={setSelectedTeamId}
       onRegisterSale={registerSale}
       onRegisterUnsold={registerUnsold}
-      onUndoCurrent={handleUndoCurrent}
+      undoTarget={undoTarget}
+      onUndoLast={handleUndoLast}
+      onUndoPlayer={undoPlayer}
       onSetCurrent={setCurrent}
       onExport={exportReport}
       onComplete={completeAuction}
@@ -760,7 +857,8 @@ const StaticAuctionTab = () => {
       onStartFresh={startFresh}
       onShowTeamsDialog={setShowTeamsDialog}
       onShowQueue={setShowQueue}
-    />
+      />
+    </div>
   );
 };
 

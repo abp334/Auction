@@ -129,6 +129,7 @@ function findEmailConflicts(
 }
 
 const noop = () => undefined;
+const CSV_PREVIEW_LIMIT = 8;
 
 const AuctionTab = () => {
   const { toast } = useToast();
@@ -140,6 +141,7 @@ const AuctionTab = () => {
   const [playersData, setPlayersData] = useState<any[]>([]);
 
   const [loading, setLoading] = useState(false);
+  const [loadingMessage, setLoadingMessage] = useState("");
   const [showEndConfirm, setShowEndConfirm] = useState(false);
 
   // Manual Dialog States
@@ -473,6 +475,9 @@ const AuctionTab = () => {
       return;
     }
     setLoading(true);
+    setLoadingMessage(
+      `Importing ${playersData.length} players and ${teamsData.length} teams…`
+    );
     try {
       const res = await apiFetch("/auctions", {
         method: "POST",
@@ -503,8 +508,10 @@ const AuctionTab = () => {
         description: "Failed to create auction",
         variant: "destructive",
       });
+    } finally {
+      setLoading(false);
+      setLoadingMessage("");
     }
-    setLoading(false);
   };
 
   const downloadCSV = async () => {
@@ -1171,13 +1178,14 @@ const AuctionTab = () => {
                     <Download className="w-3 h-3 mr-1" /> Download Sample CSV
                   </Button>
                   <div className="max-h-40 overflow-y-auto space-y-1">
-                    {playersData.map((p, i) => (
+                    {playersData.slice(0, CSV_PREVIEW_LIMIT).map((p, i) => (
                       <div
                         key={i}
                         className="flex items-center justify-between bg-white/5 p-2 rounded text-[10px] text-gray-300"
                       >
                         <span>
-                          {p.name} <span className="text-amber-400">({p.role})</span>
+                          {p.name}{" "}
+                          <span className="text-amber-400">({p.role})</span>
                         </span>
                         <div className="flex items-center gap-2">
                           <Pencil
@@ -1199,6 +1207,12 @@ const AuctionTab = () => {
                         </div>
                       </div>
                     ))}
+                    {playersData.length > CSV_PREVIEW_LIMIT && (
+                      <p className="text-[10px] text-gray-500 italic px-2">
+                        … and {playersData.length - CSV_PREVIEW_LIMIT} more
+                        players (full list imported on create)
+                      </p>
+                    )}
                   </div>
                 </div>
               </div>
@@ -1214,8 +1228,16 @@ const AuctionTab = () => {
               }
               className="w-full bg-amber-500 hover:bg-amber-600 text-black font-bold h-12 text-lg shadow-lg shadow-amber-900/20"
             >
-              {loading ? "Initializing..." : "Create Auction Room"}
+              {loading
+                ? loadingMessage || "Initializing..."
+                : "Create Auction Room"}
             </Button>
+            {loading && playersData.length > 50 && (
+              <p className="text-xs text-gray-400 text-center mt-2">
+                Large imports can take several minutes — hashing logins and
+                writing to the database.
+              </p>
+            )}
           </CardContent>
         </Card>
       ) : (

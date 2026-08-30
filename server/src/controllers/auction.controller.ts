@@ -81,6 +81,28 @@ function generateRoomCode(): string {
   return code;
 }
 
+/** Avoid hundreds of parallel inserts — exhausts Supabase pool and hangs imports. */
+async function mapInBatches<T, R>(
+  items: T[],
+  batchSize: number,
+  fn: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const results: R[] = [];
+  for (let i = 0; i < items.length; i += batchSize) {
+    const slice = items.slice(i, i + batchSize);
+    const batch = await Promise.all(
+      slice.map((item, j) => fn(item, i + j))
+    );
+    results.push(...batch);
+  }
+  return results;
+}
+
+function importTransactionTimeout(playerCount: number) {
+  // ~300ms per player on remote Supabase + headroom
+  return Math.min(180_000, 30_000 + playerCount * 400);
+}
+
 const importSchema = Joi.object({
   name: Joi.string().min(2).required(),
   mode: Joi.string().valid("live", "static").default("live"),
@@ -802,39 +824,35 @@ async function runAuctionImport(
 
   return prisma.$transaction(
     async (tx) => {
-      const createdTeams = await Promise.all(
-        value.teams.map((t) =>
-          tx.team.create({
-            data: {
-              name: t.name,
-              wallet: t.wallet || 1000000,
-              logo: t.logo || null,
-              owner: t.owner || null,
-              mobile: t.code ? String(t.code) : null,
-              captain: t.captain || null,
-              email: t.captainEmail || null,
-            },
-          })
-        )
+      const createdTeams = await mapInBatches(value.teams, 10, (t) =>
+        tx.team.create({
+          data: {
+            name: t.name,
+            wallet: t.wallet || 1000000,
+            logo: t.logo || null,
+            owner: t.owner || null,
+            mobile: t.code ? String(t.code) : null,
+            captain: t.captain || null,
+            email: t.captainEmail || null,
+          },
+        })
       );
 
-      const createdPlayers = await Promise.all(
-        value.players.map((p) =>
-          tx.player.create({
-            data: {
-              name: p.name,
-              role: p.role,
-              basePrice: p.basePrice,
-              photo: p.photo || null,
-              age: p.age || null,
-              batsmanType: p.batsmanType || null,
-              bowlerType: p.bowlerType || null,
-              mobile: p.mobile ? String(p.mobile) : null,
-              email: p.email || null,
-              teamId: null,
-            },
-          })
-        )
+      const createdPlayers = await mapInBatches(value.players, 20, (p) =>
+        tx.player.create({
+          data: {
+            name: p.name,
+            role: p.role,
+            basePrice: p.basePrice,
+            photo: p.photo || null,
+            age: p.age || null,
+            batsmanType: p.batsmanType || null,
+            bowlerType: p.bowlerType || null,
+            mobile: p.mobile ? String(p.mobile) : null,
+            email: p.email || null,
+            teamId: null,
+          },
+        })
       );
 
       const auction = await tx.auction.create({
@@ -945,22 +963,20 @@ async function runAuctionImport(
         }
       }
 
-      await Promise.all(
-        createdTeams.map((t) =>
-          tx.auctionTeam.create({
-            data: { auctionId: auction.id, teamId: t.id },
-          })
-        )
-      );
+      await tx.auctionTeam.createMany({
+        data: createdTeams.map((t) => ({
+          auctionId: auction.id,
+          teamId: t.id,
+        })),
+      });
 
-      // Preserve CSV / array order exactly via sortOrder
-      await Promise.all(
-        createdPlayers.map((p, idx) =>
-          tx.auctionPlayer.create({
-            data: { auctionId: auction.id, playerId: p.id, sortOrder: idx },
-          })
-        )
-      );
+      await tx.auctionPlayer.createMany({
+        data: createdPlayers.map((p, idx) => ({
+          auctionId: auction.id,
+          playerId: p.id,
+          sortOrder: idx,
+        })),
+      });
 
       // For static mode, set current player to first in CSV order
       if (isStatic && createdPlayers.length > 0) {
@@ -979,7 +995,10 @@ async function runAuctionImport(
         linkedPlayers,
       };
     },
-    { maxWait: 10_000, timeout: 60_000 }
+    {
+      maxWait: 15_000,
+      timeout: importTransactionTimeout(value.players.length),
+    }
   );
 }
 
