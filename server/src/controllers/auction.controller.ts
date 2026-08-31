@@ -274,15 +274,22 @@ export async function listAuctions(
     NOT?: { name: string };
   } = {};
   if (roomCode) where.roomCode = roomCode;
-  if (req.user?.role === "admin" && !superAdmin) {
-    where.isTest = false;
-    where.NOT = { name: "ClashBid Test Auction" };
 
+  if (req.user?.role === "admin") {
     const dbUser = await prisma.user.findUnique({
       where: { id: req.user.id },
       select: { auctionMode: true },
     });
     const mode = dbUser?.auctionMode || "live";
+
+    // Hide sandbox test auctions from non–super-admins
+    if (!superAdmin) {
+      where.isTest = false;
+      where.NOT = { name: "ClashBid Test Auction" };
+    }
+
+    // Scope list to this admin's mode so dashboards don't pick up unrelated auctions.
+    // Static ledgers are always tenant-scoped to the creator (including super admin).
     where.mode = mode;
     if (mode === "static") {
       where.createdById = req.user.id;
@@ -714,11 +721,30 @@ export async function getAuctionStaticBoard(
     return;
   }
 
+  // Repair stuck ledgers: queue finished but state never flipped off active
+  let state = auction.state;
+  if (auction.state === "active" || auction.state === "draft") {
+    const pending = auction.players.some((ap) => {
+      const p = ap.player;
+      if (p.teamId) return false;
+      if (p.isUnsold) return false;
+      return !auction.unsoldPlayers.some((u) => u.playerId === p.id);
+    });
+    if (!pending) {
+      await prisma.auction.update({
+        where: { id },
+        data: { state: "completed", currentPlayerId: null },
+      });
+      state = "completed";
+      auction.currentPlayerId = null;
+    }
+  }
+
   let currentPhoto: string | null = null;
   let nextPhoto: string | null = null;
   let nextPlayerId: string | null = null;
 
-  if (auction.currentPlayerId) {
+  if (auction.currentPlayerId && state !== "completed") {
     const currentIdx = auction.players.findIndex(
       (ap) => ap.player.id === auction.currentPlayerId
     );
@@ -754,7 +780,7 @@ export async function getAuctionStaticBoard(
   }));
 
   return res.status(StatusCodes.OK).json({
-    auction: { ...auction, players },
+    auction: { ...auction, state, players },
   });
 }
 
@@ -1927,7 +1953,11 @@ async function advanceStaticCurrentPlayerTx(
   const nextId = next?.player.id || null;
   await tx.auction.update({
     where: { id: auctionId },
-    data: { currentPlayerId: nextId },
+    data: {
+      currentPlayerId: nextId,
+      // Mirror live mode: empty queue → completed; otherwise keep/restore active
+      state: nextId ? "active" : "completed",
+    },
   });
 
   return nextId;
@@ -2083,6 +2113,7 @@ export async function registerSale(
         value.playerId
       );
       const nextPlayer = await fetchPlayerBoardSnapshot(tx, nextPlayerId);
+      const state = nextPlayerId ? "active" : "completed";
 
       return {
         sale,
@@ -2095,6 +2126,7 @@ export async function registerSale(
         price: value.amount,
         currentPlayerId: nextPlayerId,
         nextPlayer,
+        state,
       };
     });
 
@@ -2191,6 +2223,7 @@ export async function registerUnsold(
     status: "unsold",
     currentPlayerId: nextPlayerId,
     nextPlayer,
+    state: nextPlayerId ? "active" : "completed",
   });
 }
 
@@ -2210,10 +2243,6 @@ export async function undoSale(
     return res.status(StatusCodes.NOT_FOUND).json({ error: "Auction not found" });
   if (rejectIfNotStatic(res, auction.mode)) return;
   if (await rejectIfNotStaticOwner(req, res, auction)) return;
-  if (auction.state === "completed")
-    return res
-      .status(StatusCodes.CONFLICT)
-      .json({ error: "Auction is completed" });
 
   const sale = await prisma.sale.findUnique({
     where: { auctionId_playerId: { auctionId: id, playerId } },
@@ -2233,9 +2262,10 @@ export async function undoSale(
     await tx.sale.delete({
       where: { auctionId_playerId: { auctionId: id, playerId } },
     });
+    // Undo always re-opens the ledger (including after auto-complete)
     await tx.auction.update({
       where: { id },
-      data: { currentPlayerId: playerId },
+      data: { currentPlayerId: playerId, state: "active" },
     });
     return team;
   });
@@ -2247,6 +2277,7 @@ export async function undoSale(
     undone: true,
     restoredAmount: sale.price,
     currentPlayerId: playerId,
+    state: "active",
   });
 }
 
@@ -2266,30 +2297,26 @@ export async function undoUnsold(
     return res.status(StatusCodes.NOT_FOUND).json({ error: "Auction not found" });
   if (rejectIfNotStatic(res, auction.mode)) return;
   if (await rejectIfNotStaticOwner(req, res, auction)) return;
-  if (auction.state === "completed")
-    return res
-      .status(StatusCodes.CONFLICT)
-      .json({ error: "Auction is completed" });
 
-  await prisma.$transaction([
-    prisma.unsoldPlayer.deleteMany({
+  await prisma.$transaction(async (tx) => {
+    await tx.unsoldPlayer.deleteMany({
       where: { auctionId: id, playerId },
-    }),
-    prisma.player.update({
+    });
+    await tx.player.update({
       where: { id: playerId },
       data: { isUnsold: false },
-    }),
-  ]);
-
-  await prisma.auction.update({
-    where: { id },
-    data: { currentPlayerId: playerId },
+    });
+    await tx.auction.update({
+      where: { id },
+      data: { currentPlayerId: playerId, state: "active" },
+    });
   });
 
   return res.status(StatusCodes.OK).json({
     playerId,
     undone: true,
     currentPlayerId: playerId,
+    state: "active",
   });
 }
 

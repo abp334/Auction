@@ -254,6 +254,27 @@ const StaticAuctionTab = () => {
     }
   };
 
+  const deleteResumable = async (id: string, name: string) => {
+    const ok = window.confirm(
+      `Delete ledger "${name}"? This cannot be undone.`
+    );
+    if (!ok) return;
+    setLoading(true);
+    const res = await apiFetch(`/auctions/${id}`, { method: "DELETE" });
+    setLoading(false);
+    if (!res.ok && res.status !== 204) {
+      const err = await res.json().catch(() => ({}));
+      toast({
+        title: "Delete failed",
+        description: err.error || "Could not delete ledger.",
+        variant: "destructive",
+      });
+      return;
+    }
+    setResumable((prev) => prev.filter((a) => a.id !== id));
+    toast({ title: "Deleted", description: name });
+  };
+
   const unsoldSet = useMemo(
     () => new Set(auction?.unsoldPlayers?.map((u) => u.playerId) || []),
     [auction]
@@ -660,10 +681,18 @@ const StaticAuctionTab = () => {
     const data = await res.json();
     setLastActionPlayerId(currentPlayer.id);
     setAuction((prev) => (prev ? patchAfterSale(prev, data) : prev));
-    toast({
-      title: "Sold",
-      description: `${currentPlayer.name} sold for ${formatINR(amt)}`,
-    });
+    if (data.state === "completed" || !data.currentPlayerId) {
+      setResumable((prev) => prev.filter((a) => a.id !== auction.id));
+      toast({
+        title: "Sold — ledger complete",
+        description: `${currentPlayer.name} sold for ${formatINR(amt)}. All players resolved.`,
+      });
+    } else {
+      toast({
+        title: "Sold",
+        description: `${currentPlayer.name} sold for ${formatINR(amt)}`,
+      });
+    }
     setSelectedTeamId("");
   };
 
@@ -687,7 +716,15 @@ const StaticAuctionTab = () => {
     const data = await res.json();
     setLastActionPlayerId(currentPlayer.id);
     setAuction((prev) => (prev ? patchAfterUnsold(prev, data) : prev));
-    toast({ title: "Unsold", description: `${currentPlayer.name} marked unsold` });
+    if (data.state === "completed" || !data.currentPlayerId) {
+      setResumable((prev) => prev.filter((a) => a.id !== auction.id));
+      toast({
+        title: "Unsold — ledger complete",
+        description: `${currentPlayer.name} marked unsold. All players resolved.`,
+      });
+    } else {
+      toast({ title: "Unsold", description: `${currentPlayer.name} marked unsold` });
+    }
   };
 
   const undoSale = async (playerId: string) => {
@@ -947,6 +984,15 @@ const StaticAuctionTab = () => {
                       onClick={() => resumeLedger(a.id)}
                     >
                       {loadingResumeId === a.id ? "Opening…" : "Resume"}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="shrink-0 text-red-400 hover:text-red-300"
+                      disabled={loading}
+                      onClick={() => deleteResumable(a.id, a.name)}
+                    >
+                      Delete
                     </Button>
                   </li>
                 ))}

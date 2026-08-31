@@ -185,29 +185,20 @@ const AuctionTab = () => {
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [uploadingLogo, setUploadingLogo] = useState(false);
 
-  // Check for active auction on load (+ when test seed completes)
+  // Check for auction updates when test seed completes — never auto-open a random auction on login
   useEffect(() => {
     const checkActive = async (event?: Event) => {
+      const preferredId = (event as CustomEvent<{ auctionId?: string }>)
+        ?.detail?.auctionId;
+      // Only open an auction when explicitly requested (e.g. test seed finished)
+      if (!preferredId) return;
+
       const res = await apiFetch("/auctions");
-      if (res.ok) {
-        const { auctions } = await res.json();
-        const preferredId = (event as CustomEvent<{ auctionId?: string }>)
-          ?.detail?.auctionId;
-        if (preferredId) {
-          const chosen = auctions.find((a: any) => a.id === preferredId);
-          if (chosen) {
-            setCurrentAuction(chosen);
-            return;
-          }
-        }
-        const active = auctions.find(
-          (a: any) =>
-            a.state === "active" || a.state === "draft" || a.state === "paused"
-        );
-        if (active) setCurrentAuction(active);
-      }
+      if (!res.ok) return;
+      const { auctions } = await res.json();
+      const chosen = auctions.find((a: any) => a.id === preferredId);
+      if (chosen) setCurrentAuction(chosen);
     };
-    checkActive();
     const handler = (e: Event) => {
       void checkActive(e);
     };

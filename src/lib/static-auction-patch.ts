@@ -49,6 +49,7 @@ export function patchAfterSale(
     price: number;
     currentPlayerId: string | null;
     nextPlayer?: StaticAuctionDetail["players"][number]["player"] | null;
+    state?: string;
   }
 ): StaticAuctionDetail {
   const role =
@@ -80,6 +81,9 @@ export function patchAfterSale(
 
   return {
     ...auction,
+    state:
+      data.state ||
+      (data.currentPlayerId ? auction.state : "completed"),
     currentPlayerId: data.currentPlayerId,
     teams: auction.teams.map((at) =>
       at.team.id === data.team.id
@@ -106,6 +110,7 @@ export function patchAfterUnsold(
     playerId: string;
     currentPlayerId: string | null;
     nextPlayer?: StaticAuctionDetail["players"][number]["player"] | null;
+    state?: string;
   }
 ): StaticAuctionDetail {
   const already = auction.unsoldPlayers.some((u) => u.playerId === data.playerId);
@@ -124,6 +129,9 @@ export function patchAfterUnsold(
 
   return {
     ...auction,
+    state:
+      data.state ||
+      (data.currentPlayerId ? auction.state : "completed"),
     currentPlayerId: data.currentPlayerId,
     unsoldPlayers: already
       ? auction.unsoldPlayers
@@ -139,6 +147,7 @@ export function patchAfterUndoSale(
     teamId: string;
     teamWallet: number;
     currentPlayerId: string;
+    state?: string;
   }
 ): StaticAuctionDetail {
   const players = auction.players.map((ap) => {
@@ -178,6 +187,7 @@ export function patchAfterUndoSale(
 
   return {
     ...auction,
+    state: data.state || "active",
     currentPlayerId: data.currentPlayerId,
     teams: auction.teams.map((at) =>
       at.team.id === data.teamId
@@ -191,10 +201,11 @@ export function patchAfterUndoSale(
 
 export function patchAfterUndoUnsold(
   auction: StaticAuctionDetail,
-  data: { playerId: string; currentPlayerId: string }
+  data: { playerId: string; currentPlayerId: string; state?: string }
 ): StaticAuctionDetail {
   return {
     ...auction,
+    state: data.state || "active",
     currentPlayerId: data.currentPlayerId,
     unsoldPlayers: auction.unsoldPlayers.filter(
       (u) => u.playerId !== data.playerId
