@@ -65,8 +65,8 @@ Invite codes are tied to a mode at signup — admins get the dashboard that matc
 ├── Dockerfile.frontend.dev     # Dev frontend (Vite dev server)
 ├── nginx/default.conf        # API + Socket.io proxy for Docker frontend
 ├── samples/                  # Demo CSVs for static mode testing
-│   ├── demo_static_teams_10.csv
-│   └── demo_static_players_150.csv
+│   ├── demo_static_teams_5.csv
+│   └── demo_static_players_60.csv
 ├── scripts/                  # Smoke & isolation tests
 ├── server/                   # Express API + Socket.io
 │   ├── Dockerfile            # Production backend
@@ -191,8 +191,9 @@ Open **http://localhost:8080**.
 
 Ready-made CSVs in `samples/`:
 
-- `demo_static_teams_10.csv` — 10 teams, ₹10 cr purse each
-- `demo_static_players_150.csv` — 150 players in auction order
+- `demo_static_teams_5.csv` — 5 teams, ₹10 cr purse, logos in Supabase `auction-media`
+- `demo_static_players_60.csv` — 60 players, photos uploaded to Supabase Storage
+- Regenerate: `cd server && npx tsx scripts/seed-demo-media.ts`
 
 Create a **static** invite (super-admin) or sign up with bypass code + static mode, then import these files from the admin dashboard.
 

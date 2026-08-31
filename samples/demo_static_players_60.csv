@@ -1,0 +1,61 @@
+name,role,baseprice,age,batsmanType,bowlerType,mobile,email,photo
+Aarav Sharma,Batsman,1000,19,Right-Hand Batsman,N/A,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/d6646243-4750-4b28-b2a5-9f6e594d17da.png
+Vihaan Patel,Bowler,1250,20,N/A,Right Arm Fast,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/5e45e2fd-6660-4c5f-9272-5cee976ce23f.png
+Aditya Reddy,All-Rounder,1500,21,Right-Hand Batsman,Right Arm Medium Fast,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/d4b95024-26aa-4b3d-9b81-56c2f9938c2c.png
+Vivaan Singh,Wicketkeeper-Batsman,1750,22,Left-Hand Batsman,N/A,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/e3a468e3-0b6d-47d7-9394-8432dd18e85f.png
+Arjun Kumar,Batsman,2000,23,Left-Hand Batsman,N/A,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/a1a1150a-1151-4ec9-85f2-d191050ffe50.png
+Sai Gupta,Bowler,2250,24,N/A,Left Arm Orthodox,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/a32f75ee-4e35-4dcb-9b4e-b3f579364a41.png
+Reyansh Mehta,All-Rounder,2500,25,Left-Hand Batsman,Left Arm Fast,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/3f776ef7-abcb-4f4d-b954-15862a9ce379.png
+Ayaan Joshi,Bowler,2750,26,N/A,Right Arm Leg Spin,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/0f5fb0be-20d1-4006-a47b-f154f2317d17.png
+Krishna Nair,Batsman,3000,27,Right-Hand Batsman,N/A,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/7c1df304-df8d-4376-af4e-fb8f514e175c.png
+Ishaan Iyer,All-Rounder,3250,28,Right-Hand Batsman,Right Arm Off Spin,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/556aa011-c036-4b6c-b4f9-794ff5d52d95.png
+Shaurya Chopra,Batsman,3500,29,Right-Hand Batsman,N/A,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/c739cc04-a4b9-429b-b615-b1229b27ece4.png
+Atharv Malhotra,Bowler,3750,30,N/A,Right Arm Fast,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/3228cd2e-e4f7-487b-8525-3ca0854b2876.png
+Advik Kapoor,All-Rounder,1000,31,Right-Hand Batsman,Right Arm Medium Fast,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/dccac479-37bd-4868-bc88-96c2bcdb18ee.png
+Pranav Verma,Wicketkeeper-Batsman,1250,32,Left-Hand Batsman,N/A,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/087a0274-9cd2-4ca1-acef-5c7ccb0e9ab7.png
+Rudra Shah,Batsman,1500,33,Left-Hand Batsman,N/A,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/b74a2b00-fbc4-43f9-965a-88b8be2f772c.png
+Kabir Desai,Bowler,1750,34,N/A,Left Arm Orthodox,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/dbfa4476-216f-4df2-bf18-e861795a0a75.png
+Yuvan Bose,All-Rounder,2000,19,Left-Hand Batsman,Left Arm Fast,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/765c4726-bcf2-440a-9d8f-be84800da25b.png
+Dhruv Rao,Bowler,2250,20,N/A,Right Arm Leg Spin,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/8ac3a0c7-5ae2-4605-98cf-a9f2ad8d32d2.png
+Ansh Pillai,Batsman,2500,21,Right-Hand Batsman,N/A,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/c3b6d842-e269-45c5-8c5a-cd6323da2656.png
+Om Khan,All-Rounder,2750,22,Right-Hand Batsman,Right Arm Off Spin,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/6be57ec4-cf8e-4340-a363-ef3cd92bf1d3.png
+Rohan Saxena,Batsman,3000,23,Right-Hand Batsman,N/A,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/539f1904-3dfb-4929-a7bb-c86a824d08c6.png
+Karan Agarwal,Bowler,3250,24,N/A,Right Arm Fast,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/c505a72c-0163-453a-b9d6-f0d066a8492b.png
+Nikhil Bhat,All-Rounder,3500,25,Right-Hand Batsman,Right Arm Medium Fast,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/82d4fe92-ef41-403f-9d11-3d8e22915f9d.png
+Suresh Menon,Wicketkeeper-Batsman,3750,26,Left-Hand Batsman,N/A,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/bbfc74f4-23fb-490d-b850-b6fc80ae84f5.png
+Rahul Das,Batsman,1000,27,Left-Hand Batsman,N/A,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/ae6cb148-2ae2-49bf-8482-cded3c41ba1c.png
+Amit Chatterjee,Bowler,1250,28,N/A,Left Arm Orthodox,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/d03c39d7-060e-470c-a403-c90f650f9f22.png
+Vikram Pandey,All-Rounder,1500,29,Left-Hand Batsman,Left Arm Fast,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/c8c55284-71f4-4360-9366-8a46c70c3194.png
+Sanjay Mishra,Bowler,1750,30,N/A,Right Arm Leg Spin,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/e229b30d-7165-4d17-b789-95815c5d37c8.png
+Deepak Jain,Batsman,2000,31,Right-Hand Batsman,N/A,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/fd3ad350-2acf-4eff-90d7-f08ced3e8183.png
+Manish Trivedi,All-Rounder,2250,32,Right-Hand Batsman,Right Arm Off Spin,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/2b97fcf1-4b10-4e28-9ef8-0e3c3703283c.png
+Harsh Sharma,Batsman,2500,33,Right-Hand Batsman,N/A,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/57707aaf-24d8-4715-acc5-cebe985bccc5.png
+Yash Patel,Bowler,2750,34,N/A,Right Arm Fast,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/5cf6f47c-9d99-488b-a702-568f17999012.png
+Kunal Reddy,All-Rounder,3000,19,Right-Hand Batsman,Right Arm Medium Fast,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/dfb94a6f-40dc-44b5-97bd-20395a6389df.png
+Varun Singh,Wicketkeeper-Batsman,3250,20,Left-Hand Batsman,N/A,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/02a925e3-f381-4191-901d-3692eec86175.png
+Siddharth Kumar,Batsman,3500,21,Left-Hand Batsman,N/A,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/0fee7460-4e71-4a6e-b156-3a7854d61299.png
+Abhinav Gupta,Bowler,3750,22,N/A,Left Arm Orthodox,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/750d9fbf-a8bc-4a6e-90ed-bdf37a8c8d95.png
+Gaurav Mehta,All-Rounder,1000,23,Left-Hand Batsman,Left Arm Fast,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/b3d91302-67be-4638-a313-8886528c9f47.png
+Neel Joshi,Bowler,1250,24,N/A,Right Arm Leg Spin,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/4f598e7d-ebc6-4c17-8cd2-8b5c4c7ea2e6.png
+Parth Nair,Batsman,1500,25,Right-Hand Batsman,N/A,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/c2254c63-71a4-4b53-8a71-57523b1f76f2.png
+Dev Iyer,All-Rounder,1750,26,Right-Hand Batsman,Right Arm Off Spin,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/b7433e1e-3751-4217-bea9-449609ef4c6a.png
+Ishan Chopra,Batsman,2000,27,Right-Hand Batsman,N/A,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/ccf74e2a-0c0d-449d-81f1-1494ba055448.png
+Jai Malhotra,Bowler,2250,28,N/A,Right Arm Fast,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/e5918880-2014-4ff5-ad28-536a45d6bdf6.png
+Laksh Kapoor,All-Rounder,2500,29,Right-Hand Batsman,Right Arm Medium Fast,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/fe8e615c-9794-4d3b-8f9c-c9ff5de8e841.png
+Milan Verma,Wicketkeeper-Batsman,2750,30,Left-Hand Batsman,N/A,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/e610563c-1849-4dee-bf38-f875f407dd74.png
+Naveen Shah,Batsman,3000,31,Left-Hand Batsman,N/A,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/ceb28c14-87c1-45d1-951a-69a4d8273d0b.png
+Piyush Desai,Bowler,3250,32,N/A,Left Arm Orthodox,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/5b7258fd-088a-4685-a6f5-fa8aa7d4b585.png
+Ritesh Bose,All-Rounder,3500,33,Left-Hand Batsman,Left Arm Fast,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/11ea81d3-e985-445d-9025-906d9a641ce7.png
+Samar Rao,Bowler,3750,34,N/A,Right Arm Leg Spin,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/101036d8-734b-4886-8a43-563e0b731033.png
+Tanmay Pillai,Batsman,1000,19,Right-Hand Batsman,N/A,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/aff1583a-c964-4273-956c-956adcf58659.png
+Uday Khan,All-Rounder,1250,20,Right-Hand Batsman,Right Arm Off Spin,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/e30975e9-42e0-4466-9ef6-75bd1e0468df.png
+Veer Saxena,Batsman,1500,21,Right-Hand Batsman,N/A,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/8053b53e-7a5e-4834-9baa-f5f161069bec.png
+Wasim Agarwal,Bowler,1750,22,N/A,Right Arm Fast,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/491f7382-910b-4e0f-831d-057062ce1fcf.png
+Yuvraj Bhat,All-Rounder,2000,23,Right-Hand Batsman,Right Arm Medium Fast,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/7177ac49-5348-420e-9f6f-41f9f0874b6b.png
+Zayan Menon,Wicketkeeper-Batsman,2250,24,Left-Hand Batsman,N/A,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/d24186c6-a885-4810-b69f-3b63ead94814.png
+Aniket Das,Batsman,2500,25,Left-Hand Batsman,N/A,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/195c1d0d-4320-4a3e-9e9e-c03ff3b7fc96.png
+Bhavesh Chatterjee,Bowler,2750,26,N/A,Left Arm Orthodox,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/3d6f9dbd-664a-4faf-99e3-aeb55987af17.png
+Chirag Pandey,All-Rounder,3000,27,Left-Hand Batsman,Left Arm Fast,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/60659995-61c7-45eb-986b-d702bfd04a78.png
+Darshan Mishra,Bowler,3250,28,N/A,Right Arm Leg Spin,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/fda4a9c7-adb2-4874-9af7-78e623fba18a.png
+Eshan Jain,Batsman,3500,29,Right-Hand Batsman,N/A,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/b37fd75e-205f-483e-9b8c-1b483114dad5.png
+Farhan Trivedi,All-Rounder,3750,30,Right-Hand Batsman,Right Arm Off Spin,,,https://fxwfgbpzdrtksdrtoofl.supabase.co/storage/v1/object/public/auction-media/players/f095ed26-25f9-4b72-8afa-6cc3fa8099ee.png

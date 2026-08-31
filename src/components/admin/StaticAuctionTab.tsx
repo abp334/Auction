@@ -143,6 +143,10 @@ const StaticAuctionTab = () => {
   const [loading, setLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState("");
   const [auction, setAuction] = useState<AuctionDetail | null>(null);
+  const [resumable, setResumable] = useState<
+    Array<{ id: string; name: string; state: string; createdAt?: string }>
+  >([]);
+  const [loadingResumeId, setLoadingResumeId] = useState<string | null>(null);
 
   const [selectedTeamId, setSelectedTeamId] = useState("");
   const [amount, setAmount] = useState("");
@@ -208,17 +212,47 @@ const StaticAuctionTab = () => {
       if (!res.ok) return;
       const { auctions } = await res.json();
       const staticOnes = (auctions || []).filter((a: any) => a.mode === "static");
-      // Prefer an in-progress ledger; never trap admin on a completed one.
-      const preferred =
-        staticOnes.find((a: any) => a.state === "active") ||
-        staticOnes.find((a: any) => a.state === "draft") ||
-        null;
-      if (preferred) {
-        const full = await loadAuction(preferred.id);
-        if (full) setAuction(full);
-      }
+      // List in-progress ledgers for optional resume — do NOT auto-open one
+      // (super-admins especially would land on an unrelated "first active" auction).
+      const open = staticOnes
+        .filter((a: any) => a.state === "active" || a.state === "draft")
+        .sort(
+          (a: any, b: any) =>
+            new Date(b.createdAt || 0).getTime() -
+            new Date(a.createdAt || 0).getTime()
+        )
+        .map((a: any) => ({
+          id: a.id,
+          name: a.name,
+          state: a.state,
+          createdAt: a.createdAt,
+        }));
+      setResumable(open);
     })();
-  }, [loadAuction]);
+  }, []);
+
+  const resumeLedger = async (id: string) => {
+    setLoadingResumeId(id);
+    setLoading(true);
+    setLoadingMessage("Opening ledger…");
+    try {
+      const full = await loadAuction(id);
+      if (full) {
+        setAuction(full);
+        toast({ title: "Resumed", description: full.name });
+      } else {
+        toast({
+          title: "Could not open",
+          description: "Ledger not found or failed to load.",
+          variant: "destructive",
+        });
+      }
+    } finally {
+      setLoading(false);
+      setLoadingMessage("");
+      setLoadingResumeId(null);
+    }
+  };
 
   const unsoldSet = useMemo(
     () => new Set(auction?.unsoldPlayers?.map((u) => u.playerId) || []),
@@ -553,6 +587,18 @@ const StaticAuctionTab = () => {
         setTeamsData([]);
         setPlayersData([]);
         setAuctionName("");
+        setResumable((prev) =>
+          prev.some((a) => a.id === full.id)
+            ? prev
+            : [
+                {
+                  id: full.id,
+                  name: full.name,
+                  state: full.state,
+                },
+                ...prev,
+              ]
+        );
         toast({ title: "Ledger ready", description: data.message });
       } else {
         toast({
@@ -817,6 +863,7 @@ const StaticAuctionTab = () => {
     setAuction(null);
     setTeamsData([]);
     setPlayersData([]);
+    setResumable((prev) => prev.filter((a) => a.id !== auction.id));
     toast({ title: "Ready", description: "Upload a new CSV to start a fresh ledger." });
   };
 
@@ -866,6 +913,47 @@ const StaticAuctionTab = () => {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
+          {resumable.length > 0 && (
+            <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-4 space-y-3">
+              <div>
+                <p className="text-sm font-semibold text-amber-300">
+                  Resume an existing ledger
+                </p>
+                <p className="text-xs text-gray-400 mt-0.5">
+                  Nothing opens automatically — pick one below, or create a new
+                  ledger underneath.
+                </p>
+              </div>
+              <ul className="space-y-2 max-h-40 overflow-y-auto">
+                {resumable.map((a) => (
+                  <li
+                    key={a.id}
+                    className="flex items-center justify-between gap-3 rounded bg-white/5 px-3 py-2"
+                  >
+                    <div className="min-w-0">
+                      <p className="text-sm text-white truncate">{a.name}</p>
+                      <p className="text-[11px] text-gray-500 capitalize">
+                        {a.state}
+                        {a.createdAt
+                          ? ` · ${new Date(a.createdAt).toLocaleString()}`
+                          : ""}
+                      </p>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="shrink-0 border-amber-500/50 text-amber-400"
+                      disabled={loading}
+                      onClick={() => resumeLedger(a.id)}
+                    >
+                      {loadingResumeId === a.id ? "Opening…" : "Resume"}
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
           <div className="grid sm:grid-cols-2 gap-4">
             <div className="space-y-1">
               <Label className="text-gray-300">Auction name</Label>
