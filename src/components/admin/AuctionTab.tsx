@@ -53,6 +53,11 @@ import {
 import { apiFetch } from "@/lib/api";
 import { parseCSV, jsonToCSV } from "@/lib/utils";
 import AuctionRoom from "@/components/auction/AuctionRoom";
+import { MediaMark } from "@/components/MediaMark";
+import {
+  sanitizeCsvMediaUrl,
+  uploadAuctionImage,
+} from "@/lib/image-upload";
 import {
   downloadAuctionCSV,
   downloadAuctionPDF,
@@ -157,7 +162,7 @@ const AuctionTab = () => {
     wallet: 10000000,
     owner: "",
     code: "",
-    logo: "🏆",
+    logo: "",
     captain: "",
     captainEmail: "",
   };
@@ -176,6 +181,9 @@ const AuctionTab = () => {
   // Manual Form States
   const [teamForm, setTeamForm] = useState({ ...emptyTeamForm });
   const [playerForm, setPlayerForm] = useState({ ...emptyPlayerForm });
+
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [uploadingLogo, setUploadingLogo] = useState(false);
 
   // Check for active auction on load (+ when test seed completes)
   useEffect(() => {
@@ -237,19 +245,53 @@ const AuctionTab = () => {
     return () => clearInterval(interval);
   }, [currentAuction?.id, currentAuction?.state]);
 
-  // Gallery Image Handler (Converts file to Base64)
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handlePlayerPhotoUpload = async (
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
     const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setPlayerForm((prev) => ({ ...prev, photo: reader.result as string }));
-        toast({
-          title: "Image Uploaded",
-          description: "Player photo is ready.",
-        });
-      };
-      reader.readAsDataURL(file);
+    e.target.value = "";
+    if (!file) return;
+    setUploadingPhoto(true);
+    try {
+      const url = await uploadAuctionImage(file, "player");
+      setPlayerForm((prev) => ({ ...prev, photo: url }));
+      toast({
+        title: "Photo uploaded",
+        description: "Stored on Supabase CDN — ready to stage.",
+      });
+    } catch (err: any) {
+      toast({
+        title: "Upload failed",
+        description: err?.message || "Could not upload photo.",
+        variant: "destructive",
+      });
+    } finally {
+      setUploadingPhoto(false);
+    }
+  };
+
+  const handleTeamLogoUpload = async (
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setUploadingLogo(true);
+    try {
+      const url = await uploadAuctionImage(file, "team");
+      setTeamForm((prev) => ({ ...prev, logo: url }));
+      toast({
+        title: "Logo uploaded",
+        description: "Stored on Supabase CDN — ready to stage.",
+      });
+    } catch (err: any) {
+      toast({
+        title: "Upload failed",
+        description: err?.message || "Could not upload logo.",
+        variant: "destructive",
+      });
+    } finally {
+      setUploadingLogo(false);
     }
   };
 
@@ -272,7 +314,7 @@ const AuctionTab = () => {
             name: p.name || p.team || p["team name"] || "New Team",
             wallet: Number(p.wallet || 10000000),
             owner: p.owner || "Owner",
-            logo: p.logo || "🏆",
+            logo: sanitizeCsvMediaUrl(p.logo) || "",
             captain: p.captain || p["captain name"] || "",
             captainEmail: p.email || p["captain email"] || "",
           }));
@@ -318,7 +360,7 @@ const AuctionTab = () => {
             role: String(p.role).trim(),
             basePrice: Number(p.baseprice || p.price || 1000),
             age: Number(p.age || 25),
-            photo: p.photo || "",
+            photo: sanitizeCsvMediaUrl(p.photo),
             batsmanType: cleanNA(p.batsmantype || p.battingtype || p.batting),
             bowlerType:
               cleanNA(p.bowlertype || p.bowlingtype || p.bowling) || "None",
@@ -383,7 +425,7 @@ const AuctionTab = () => {
               captain: "MS Dhoni",
               wallet: 10000000,
               owner: "Owner Name",
-              logo: "🦁",
+              logo: "https://YOUR_PROJECT.supabase.co/storage/v1/object/public/auction-media/teams/csk.jpg",
               email: "captain.csk@example.com",
             },
             {
@@ -391,7 +433,7 @@ const AuctionTab = () => {
               captain: "Rohit Sharma",
               wallet: 10000000,
               owner: "Owner Name",
-              logo: "🔵",
+              logo: "",
               email: "captain.mi@example.com",
             },
           ]
@@ -405,7 +447,8 @@ const AuctionTab = () => {
               bowlerType: "N/A",
               mobile: "9876543210",
               email: "het.shah@example.com",
-              photo: "https://example.com/het.jpg",
+              photo:
+                "https://YOUR_PROJECT.supabase.co/storage/v1/object/public/auction-media/players/het.jpg",
             },
             {
               name: "Ravi Kumar",
@@ -676,6 +719,43 @@ const AuctionTab = () => {
                         </DialogTitle>
                       </DialogHeader>
                       <div className="grid grid-cols-2 gap-4 py-4">
+                        <div className="col-span-2 flex items-center gap-4">
+                          <div className="w-16 h-16 rounded-lg bg-white/5 border border-white/10 flex items-center justify-center overflow-hidden">
+                            <MediaMark
+                              src={teamForm.logo}
+                              alt={teamForm.name || "Team logo"}
+                              fallback="🏆"
+                              imgClassName="w-full h-full object-cover"
+                              className="text-2xl"
+                            />
+                          </div>
+                          <div className="flex-1 space-y-1">
+                            <Label>Team logo (optional)</Label>
+                            <Input
+                              type="file"
+                              accept="image/*"
+                              disabled={uploadingLogo}
+                              onChange={handleTeamLogoUpload}
+                              className="bg-[#0f1419] border-white/20 text-xs"
+                            />
+                            {uploadingLogo && (
+                              <p className="text-[10px] text-amber-400">
+                                Uploading…
+                              </p>
+                            )}
+                            {teamForm.logo && (
+                              <button
+                                type="button"
+                                className="text-[10px] text-red-400"
+                                onClick={() =>
+                                  setTeamForm((prev) => ({ ...prev, logo: "" }))
+                                }
+                              >
+                                Remove logo
+                              </button>
+                            )}
+                          </div>
+                        </div>
                         <div className="space-y-2">
                           <Label>Team Name</Label>
                           <Input
@@ -935,9 +1015,15 @@ const AuctionTab = () => {
                           <Input
                             type="file"
                             accept="image/*"
-                            onChange={handleImageUpload}
+                            disabled={uploadingPhoto}
+                            onChange={handlePlayerPhotoUpload}
                             className="bg-[#0f1419] border-white/20 text-xs"
                           />
+                          {uploadingPhoto && (
+                            <span className="text-[10px] text-amber-400">
+                              Uploading…
+                            </span>
+                          )}
                         </div>
                         <Input
                           placeholder="Player Name"

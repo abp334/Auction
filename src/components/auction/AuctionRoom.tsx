@@ -18,6 +18,8 @@ import { Progress } from "@/components/ui/progress";
 import { io, type Socket } from "socket.io-client";
 import { apiFetch, getAccessToken } from "@/lib/api";
 import { useAuth } from "@/hooks/use-auth";
+import { MediaMark } from "@/components/MediaMark";
+import { prefetchImageUrl } from "@/lib/image-upload";
 
 interface AuctionRoomProps {
   role: "admin" | "captain" | "player";
@@ -218,6 +220,10 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
       setCurrentPlayer(null);
     }
   }, [role, user]);
+
+  useEffect(() => {
+    prefetchImageUrl(currentPlayer?.photo);
+  }, [currentPlayer?.id, currentPlayer?.photo]);
 
   const warnIfLowPurseReserve = (
     myTeam: Team,
@@ -801,6 +807,7 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
                         src={currentPlayer.photo}
                         className="w-40 h-40 rounded-full object-cover mb-6 border-4 border-amber-500/50"
                         alt={currentPlayer.name}
+                        decoding="async"
                       />
                     ) : (
                       <User className="w-40 h-40 mb-6 text-gray-400" />
@@ -979,7 +986,13 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
                       }`}
                     >
                       <div className="flex items-center gap-2 mb-2">
-                        <span className="text-xs font-semibold text-amber-400 uppercase">{team.logo}</span>
+                        <MediaMark
+                          src={team.logo}
+                          alt={team.name}
+                          fallback="🏆"
+                          imgClassName="w-8 h-8 rounded object-cover shrink-0"
+                          className="text-xs font-semibold text-amber-400 uppercase shrink-0"
+                        />
                         <div className="flex-1 min-w-0">
                           <p className="font-bold text-white truncate">
                             {team.name}
@@ -1024,6 +1037,8 @@ const AuctionRoom = ({ role, roomCode, onExit }: AuctionRoomProps) => {
                             <img
                               src={player.photo}
                               alt={player.name}
+                              loading="lazy"
+                              decoding="async"
                               className="w-12 h-12 rounded-full object-cover"
                             />
                           ) : (

@@ -315,6 +315,7 @@ function StaticBidderBoard(props: Props) {
                   <img
                     src={props.currentPlayer.photo}
                     alt=""
+                    decoding="async"
                     className="w-16 h-16 lg:w-[72px] lg:h-[72px] rounded-full object-cover ring-2 ring-amber-500/60 shrink-0"
                   />
                 ) : (

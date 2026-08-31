@@ -7,6 +7,7 @@ import auctionRoutes from "./v1/auction.routes.js";
 import userRoutes from "./v1/user.routes.js";
 import inviteRoutes from "./v1/invite.routes.js";
 import contactRoutes from "./v1/contact.routes.js";
+import uploadRoutes from "./v1/upload.routes.js";
 
 export const apiRouter = Router();
 
@@ -17,3 +18,4 @@ apiRouter.use("/v1/auctions", auctionRoutes);
 apiRouter.use("/v1/users", userRoutes);
 apiRouter.use("/v1/invites", inviteRoutes);
 apiRouter.use("/v1/contact", contactRoutes);
+apiRouter.use("/v1/uploads", uploadRoutes);

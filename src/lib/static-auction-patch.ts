@@ -71,7 +71,8 @@ export function patchAfterSale(
     if (data.nextPlayer && ap.player.id === data.nextPlayer.id) {
       return { ...ap, player: { ...ap.player, ...data.nextPlayer } };
     }
-    if (ap.player.id === data.currentPlayerId && data.currentPlayerId) {
+    // Drop cached photos for everyone else (current is nextPlayer above)
+    if (ap.player.photo) {
       return { ...ap, player: { ...ap.player, photo: null } };
     }
     return ap;

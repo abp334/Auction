@@ -19,6 +19,10 @@ import {
   isTestParticipantEmail,
 } from "../utils/testAuctionSeed.js";
 import { isSuperAdminUser } from "../utils/superAdmin.js";
+import {
+  sanitizePlayerPhoto,
+  sanitizeTeamLogo,
+} from "../utils/supabaseStorage.js";
 import { wipeAllTestAuctions } from "../utils/testAuctionCleanup.js";
 
 const BID_INCREMENT = 1000;
@@ -711,12 +715,29 @@ export async function getAuctionStaticBoard(
   }
 
   let currentPhoto: string | null = null;
+  let nextPhoto: string | null = null;
+  let nextPlayerId: string | null = null;
+
   if (auction.currentPlayerId) {
-    const p = await prisma.player.findUnique({
-      where: { id: auction.currentPlayerId },
-      select: { photo: true },
-    });
-    currentPhoto = p?.photo ?? null;
+    const currentIdx = auction.players.findIndex(
+      (ap) => ap.player.id === auction.currentPlayerId
+    );
+    const nextRow =
+      currentIdx >= 0 ? auction.players[currentIdx + 1] : undefined;
+    nextPlayerId = nextRow?.player.id || null;
+
+    const ids = [auction.currentPlayerId, nextPlayerId].filter(
+      Boolean
+    ) as string[];
+    if (ids.length) {
+      const photos = await prisma.player.findMany({
+        where: { id: { in: ids } },
+        select: { id: true, photo: true },
+      });
+      const byId = new Map(photos.map((p) => [p.id, p.photo ?? null]));
+      currentPhoto = byId.get(auction.currentPlayerId) ?? null;
+      if (nextPlayerId) nextPhoto = byId.get(nextPlayerId) ?? null;
+    }
   }
 
   const players = auction.players.map((ap) => ({
@@ -724,7 +745,11 @@ export async function getAuctionStaticBoard(
     player: {
       ...ap.player,
       photo:
-        ap.player.id === auction.currentPlayerId ? currentPhoto : null,
+        ap.player.id === auction.currentPlayerId
+          ? currentPhoto
+          : ap.player.id === nextPlayerId
+            ? nextPhoto
+            : null,
     },
   }));
 
@@ -829,7 +854,7 @@ async function runAuctionImport(
           data: {
             name: t.name,
             wallet: t.wallet || 1000000,
-            logo: t.logo || null,
+            logo: sanitizeTeamLogo(t.logo),
             owner: t.owner || null,
             mobile: t.code ? String(t.code) : null,
             captain: t.captain || null,
@@ -844,7 +869,7 @@ async function runAuctionImport(
             name: p.name,
             role: p.role,
             basePrice: p.basePrice,
-            photo: p.photo || null,
+            photo: sanitizePlayerPhoto(p.photo),
             age: p.age || null,
             batsmanType: p.batsmanType || null,
             bowlerType: p.bowlerType || null,

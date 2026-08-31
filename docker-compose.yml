@@ -52,6 +52,9 @@ services:
       CLIENT_ORIGIN: http://localhost:8080
       SIGNUP_BYPASS_CODE: TESTBYPASS
       SUPER_ADMIN_EMAILS: superadmin@bidarena.com
+      SUPABASE_URL: ${SUPABASE_URL:-}
+      SUPABASE_SECRET_KEY: ${SUPABASE_SECRET_KEY:-}
+      SUPABASE_STORAGE_BUCKET: ${SUPABASE_STORAGE_BUCKET:-auction-media}
     depends_on:
       postgres:
         condition: service_healthy

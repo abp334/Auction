@@ -10,10 +10,38 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
-import { Download, FileSpreadsheet, ClipboardList } from "lucide-react";
+import {
+  Download,
+  FileSpreadsheet,
+  ClipboardList,
+  Plus,
+  Trash2,
+  Pencil,
+  Image as ImageIcon,
+} from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { apiFetch } from "@/lib/api";
 import StaticBidderBoard from "@/components/admin/StaticBidderBoard";
+import { MediaMark } from "@/components/MediaMark";
 import { parseCSV, jsonToCSV } from "@/lib/utils";
+import {
+  sanitizeCsvMediaUrl,
+  uploadAuctionImage,
+  prefetchImageUrl,
+} from "@/lib/image-upload";
 import {
   downloadAuctionCSV,
   downloadAuctionPDF,
@@ -53,6 +81,32 @@ type StagedPlayer = {
 };
 
 const CSV_PREVIEW_LIMIT = 8;
+
+const PLAYER_ROLES = [
+  "Batsman",
+  "Bowler",
+  "All-Rounder",
+  "Wicketkeeper-Batsman",
+];
+const BATTING_TYPES = ["Right-Hand Batsman", "Left-Hand Batsman"];
+const BOWLING_TYPES = [
+  "None",
+  "Right Arm Fast",
+  "Right Arm Medium Fast",
+  "Right Arm Medium",
+  "Left Arm Fast",
+  "Left Arm Medium Fast",
+  "Left Arm Medium",
+  "Right Arm Off Spin",
+  "Right Arm Leg Spin",
+  "Left Arm Orthodox",
+  "Left Arm Chinaman",
+  "Left Arm Wrist Spin",
+];
+const needsBattingType = (role: string) =>
+  ["Batsman", "All-Rounder", "Wicketkeeper-Batsman"].includes(role);
+const needsBowlingType = (role: string) =>
+  ["Bowler", "All-Rounder"].includes(role);
 
 function buildCommentaryLines(
   orderedPlayers: StaticAuctionDetail["players"],
@@ -98,6 +152,37 @@ const StaticAuctionTab = () => {
   const [lastActionPlayerId, setLastActionPlayerId] = useState<string | null>(
     null
   );
+
+  const [isTeamDialogOpen, setIsTeamDialogOpen] = useState(false);
+  const [isPlayerDialogOpen, setIsPlayerDialogOpen] = useState(false);
+  const [editTeamIndex, setEditTeamIndex] = useState<number | null>(null);
+  const [editPlayerIndex, setEditPlayerIndex] = useState<number | null>(null);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [uploadingLogo, setUploadingLogo] = useState(false);
+
+  const emptyTeamForm: StagedTeam = {
+    name: "",
+    wallet: 10000000,
+    owner: "",
+    logo: "",
+    captain: "",
+    captainEmail: "",
+  };
+  const emptyPlayerForm: StagedPlayer = {
+    name: "",
+    role: "",
+    basePrice: 1000,
+    age: 25,
+    batsmanType: "Right-Hand Batsman",
+    bowlerType: "None",
+    mobile: "",
+    email: "",
+    photo: "",
+  };
+  const [teamForm, setTeamForm] = useState<StagedTeam>({ ...emptyTeamForm });
+  const [playerForm, setPlayerForm] = useState<StagedPlayer>({
+    ...emptyPlayerForm,
+  });
 
   const loadAuction = useCallback(async (id: string) => {
     const boardRes = await apiFetch(`/auctions/${id}/static-board`);
@@ -262,6 +347,61 @@ const StaticAuctionTab = () => {
     }
   }, [currentPlayer?.id]);
 
+  // Prefetch current + next player photos (CDN URLs only)
+  useEffect(() => {
+    if (!orderedPlayers.length || !auction?.currentPlayerId) return;
+    const idx = orderedPlayers.findIndex(
+      (ap) => ap.player.id === auction.currentPlayerId
+    );
+    if (idx < 0) return;
+    prefetchImageUrl(orderedPlayers[idx]?.player.photo);
+    prefetchImageUrl(orderedPlayers[idx + 1]?.player.photo);
+  }, [auction?.currentPlayerId, orderedPlayers]);
+
+  const handlePlayerPhotoUpload = async (
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setUploadingPhoto(true);
+    try {
+      const url = await uploadAuctionImage(file, "player");
+      setPlayerForm((prev) => ({ ...prev, photo: url }));
+      toast({ title: "Photo uploaded", description: "Ready to stage." });
+    } catch (err: any) {
+      toast({
+        title: "Upload failed",
+        description: err?.message || "Could not upload photo.",
+        variant: "destructive",
+      });
+    } finally {
+      setUploadingPhoto(false);
+    }
+  };
+
+  const handleTeamLogoUpload = async (
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setUploadingLogo(true);
+    try {
+      const url = await uploadAuctionImage(file, "team");
+      setTeamForm((prev) => ({ ...prev, logo: url }));
+      toast({ title: "Logo uploaded", description: "Ready to stage." });
+    } catch (err: any) {
+      toast({
+        title: "Upload failed",
+        description: err?.message || "Could not upload logo.",
+        variant: "destructive",
+      });
+    } finally {
+      setUploadingLogo(false);
+    }
+  };
+
   const handleCsvUpload = (
     e: React.ChangeEvent<HTMLInputElement>,
     type: "teams" | "players"
@@ -280,7 +420,7 @@ const StaticAuctionTab = () => {
             name: p.name || p.team || p["team name"] || "New Team",
             wallet: Number(p.wallet || 10000000),
             owner: p.owner || "",
-            logo: p.logo || "",
+            logo: sanitizeCsvMediaUrl(p.logo),
             captain: p.captain || p["captain name"] || "",
             captainEmail: p.email || p["captain email"] || "",
           }));
@@ -295,7 +435,7 @@ const StaticAuctionTab = () => {
             role: String(p.role || "Batsman").trim(),
             basePrice: Number(p.baseprice || p.price || 1000),
             age: Number(p.age || 25),
-            photo: p.photo || "",
+            photo: sanitizeCsvMediaUrl(p.photo),
             batsmanType: cleanNA(p.batsmantype || p.battingtype || p.batting),
             bowlerType:
               cleanNA(p.bowlertype || p.bowlingtype || p.bowling) || "None",
@@ -330,7 +470,7 @@ const StaticAuctionTab = () => {
               captain: "MS Dhoni",
               wallet: 10000000,
               owner: "Owner",
-              logo: "",
+              logo: "https://YOUR_PROJECT.supabase.co/storage/v1/object/public/auction-media/teams/csk.jpg",
             },
             {
               name: "Mumbai Indians",
@@ -348,6 +488,8 @@ const StaticAuctionTab = () => {
               age: 25,
               batsmanType: "Right-Hand Batsman",
               bowlerType: "N/A",
+              photo:
+                "https://YOUR_PROJECT.supabase.co/storage/v1/object/public/auction-media/players/one.jpg",
             },
             {
               name: "Player Two",
@@ -356,6 +498,7 @@ const StaticAuctionTab = () => {
               age: 28,
               batsmanType: "N/A",
               bowlerType: "Right Arm Fast",
+              photo: "",
             },
           ];
     const blob = new Blob([jsonToCSV(sample)], {
@@ -718,8 +861,8 @@ const StaticAuctionTab = () => {
             <CardTitle className="text-white">Single Bidder Mode</CardTitle>
           </div>
           <CardDescription className="text-gray-400">
-            Upload teams and players in CSV order, then record each sale on
-            behalf of all teams. No multiplayer, no timers.
+            Add teams and players manually or via CSV (order kept). Photos/logos
+            are uploaded to Supabase — CSV cells need public image URLs.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
@@ -745,17 +888,141 @@ const StaticAuctionTab = () => {
           </div>
 
           <div className="grid sm:grid-cols-2 gap-4">
+            {/* Teams */}
             <div className="p-4 rounded-lg border border-white/10 bg-white/5 space-y-3">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-2">
                 <Label className="text-white">Teams ({teamsData.length})</Label>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => downloadSampleCSV("teams")}
-                  className="text-gray-400"
-                >
-                  <Download className="w-4 h-4 mr-1" /> Sample
-                </Button>
+                <div className="flex items-center gap-1">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => downloadSampleCSV("teams")}
+                    className="text-gray-400"
+                  >
+                    <Download className="w-4 h-4 mr-1" /> Sample
+                  </Button>
+                  <Dialog
+                    open={isTeamDialogOpen}
+                    onOpenChange={(open) => {
+                      setIsTeamDialogOpen(open);
+                      if (!open) {
+                        setEditTeamIndex(null);
+                        setTeamForm({ ...emptyTeamForm });
+                      }
+                    }}
+                  >
+                    <DialogTrigger asChild>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="border-emerald-500/50 text-emerald-400"
+                        onClick={() => {
+                          setEditTeamIndex(null);
+                          setTeamForm({ ...emptyTeamForm });
+                        }}
+                      >
+                        <Plus className="w-4 h-4 mr-1" /> Add Manual
+                      </Button>
+                    </DialogTrigger>
+                    <DialogContent className="bg-[#1a2332] text-white border-white/10 max-w-lg">
+                      <DialogHeader>
+                        <DialogTitle>
+                          {editTeamIndex !== null ? "Edit Team" : "Add Team"}
+                        </DialogTitle>
+                      </DialogHeader>
+                      <div className="grid grid-cols-2 gap-4 py-2">
+                        <div className="col-span-2 flex items-center gap-3">
+                          <div className="w-14 h-14 rounded-lg bg-white/5 border border-white/10 overflow-hidden flex items-center justify-center">
+                            <MediaMark
+                              src={teamForm.logo}
+                              fallback="🏆"
+                              imgClassName="w-full h-full object-cover"
+                              className="text-xl"
+                            />
+                          </div>
+                          <div className="flex-1">
+                            <Label>Logo (optional)</Label>
+                            <Input
+                              type="file"
+                              accept="image/*"
+                              disabled={uploadingLogo}
+                              onChange={handleTeamLogoUpload}
+                              className="bg-[#0f1419] border-white/20 text-xs mt-1"
+                            />
+                          </div>
+                        </div>
+                        <Input
+                          placeholder="Team name"
+                          value={teamForm.name}
+                          onChange={(e) =>
+                            setTeamForm({ ...teamForm, name: e.target.value })
+                          }
+                          className="bg-[#0f1419] col-span-2"
+                        />
+                        <Input
+                          type="number"
+                          placeholder="Wallet"
+                          value={teamForm.wallet}
+                          onChange={(e) =>
+                            setTeamForm({
+                              ...teamForm,
+                              wallet: Number(e.target.value),
+                            })
+                          }
+                          className="bg-[#0f1419]"
+                        />
+                        <Input
+                          placeholder="Captain (optional)"
+                          value={teamForm.captain || ""}
+                          onChange={(e) =>
+                            setTeamForm({
+                              ...teamForm,
+                              captain: e.target.value,
+                            })
+                          }
+                          className="bg-[#0f1419]"
+                        />
+                        <Input
+                          placeholder="Owner (optional)"
+                          value={teamForm.owner || ""}
+                          onChange={(e) =>
+                            setTeamForm({ ...teamForm, owner: e.target.value })
+                          }
+                          className="bg-[#0f1419] col-span-2"
+                        />
+                      </div>
+                      <Button
+                        className="w-full bg-emerald-500 text-black font-bold"
+                        disabled={!teamForm.name.trim()}
+                        onClick={() => {
+                          if (!teamForm.name.trim()) return;
+                          if (editTeamIndex !== null) {
+                            setTeamsData((prev) =>
+                              prev.map((t, i) =>
+                                i === editTeamIndex ? teamForm : t
+                              )
+                            );
+                          } else {
+                            setTeamsData((prev) => [...prev, teamForm]);
+                          }
+                          setTeamForm({ ...emptyTeamForm });
+                          setEditTeamIndex(null);
+                          setIsTeamDialogOpen(false);
+                          toast({
+                            title:
+                              editTeamIndex !== null
+                                ? "Team updated"
+                                : "Team staged",
+                          });
+                        }}
+                      >
+                        {editTeamIndex !== null
+                          ? "Save Changes"
+                          : "Add to Staging"}
+                      </Button>
+                    </DialogContent>
+                  </Dialog>
+                </div>
               </div>
               <Input
                 type="file"
@@ -763,10 +1030,41 @@ const StaticAuctionTab = () => {
                 onChange={(e) => handleCsvUpload(e, "teams")}
                 className="bg-white/10 border-white/20 text-white file:text-white"
               />
-              <ul className="text-sm text-gray-400 max-h-32 overflow-y-auto space-y-1">
+              <ul className="text-sm text-gray-400 max-h-40 overflow-y-auto space-y-1">
                 {teamsData.slice(0, CSV_PREVIEW_LIMIT).map((t, i) => (
-                  <li key={`${t.name}-${i}`}>
-                    {t.name} · {formatINR(t.wallet)}
+                  <li
+                    key={`${t.name}-${i}`}
+                    className="flex items-center justify-between gap-2"
+                  >
+                    <span className="flex items-center gap-2 min-w-0">
+                      <MediaMark
+                        src={t.logo}
+                        fallback="🏆"
+                        imgClassName="w-5 h-5 rounded object-cover"
+                        className="text-sm shrink-0"
+                      />
+                      <span className="truncate">
+                        {t.name} · {formatINR(t.wallet)}
+                      </span>
+                    </span>
+                    <span className="flex items-center gap-2 shrink-0">
+                      <Pencil
+                        className="w-3.5 h-3.5 text-amber-400 cursor-pointer"
+                        onClick={() => {
+                          setTeamForm({ ...emptyTeamForm, ...t });
+                          setEditTeamIndex(i);
+                          setIsTeamDialogOpen(true);
+                        }}
+                      />
+                      <Trash2
+                        className="w-3.5 h-3.5 text-red-400 cursor-pointer"
+                        onClick={() =>
+                          setTeamsData((prev) =>
+                            prev.filter((_, idx) => idx !== i)
+                          )
+                        }
+                      />
+                    </span>
                   </li>
                 ))}
                 {teamsData.length > CSV_PREVIEW_LIMIT && (
@@ -787,19 +1085,219 @@ const StaticAuctionTab = () => {
               )}
             </div>
 
+            {/* Players */}
             <div className="p-4 rounded-lg border border-white/10 bg-white/5 space-y-3">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-2">
                 <Label className="text-white">
-                  Players ({playersData.length}) — CSV order kept
+                  Players ({playersData.length})
                 </Label>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => downloadSampleCSV("players")}
-                  className="text-gray-400"
-                >
-                  <Download className="w-4 h-4 mr-1" /> Sample
-                </Button>
+                <div className="flex items-center gap-1">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => downloadSampleCSV("players")}
+                    className="text-gray-400"
+                  >
+                    <Download className="w-4 h-4 mr-1" /> Sample
+                  </Button>
+                  <Dialog
+                    open={isPlayerDialogOpen}
+                    onOpenChange={(open) => {
+                      setIsPlayerDialogOpen(open);
+                      if (!open) {
+                        setEditPlayerIndex(null);
+                        setPlayerForm({ ...emptyPlayerForm });
+                      }
+                    }}
+                  >
+                    <DialogTrigger asChild>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="border-emerald-500/50 text-emerald-400"
+                        onClick={() => {
+                          setEditPlayerIndex(null);
+                          setPlayerForm({ ...emptyPlayerForm });
+                        }}
+                      >
+                        <Plus className="w-4 h-4 mr-1" /> Add Manual
+                      </Button>
+                    </DialogTrigger>
+                    <DialogContent className="bg-[#1a2332] text-white border-white/10 max-w-xl">
+                      <DialogHeader>
+                        <DialogTitle>
+                          {editPlayerIndex !== null
+                            ? "Edit Player"
+                            : "Add Player"}
+                        </DialogTitle>
+                      </DialogHeader>
+                      <div className="grid grid-cols-2 gap-3 py-2">
+                        <div className="col-span-2 flex items-center gap-3">
+                          <div className="w-14 h-14 rounded-full bg-white/5 border border-white/10 overflow-hidden flex items-center justify-center">
+                            {playerForm.photo ? (
+                              <img
+                                src={playerForm.photo}
+                                alt=""
+                                className="w-full h-full object-cover"
+                              />
+                            ) : (
+                              <ImageIcon className="text-gray-600 w-5 h-5" />
+                            )}
+                          </div>
+                          <div className="flex-1">
+                            <Label>Photo (optional)</Label>
+                            <Input
+                              type="file"
+                              accept="image/*"
+                              disabled={uploadingPhoto}
+                              onChange={handlePlayerPhotoUpload}
+                              className="bg-[#0f1419] border-white/20 text-xs mt-1"
+                            />
+                            {uploadingPhoto && (
+                              <p className="text-[10px] text-amber-400 mt-1">
+                                Uploading…
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                        <Input
+                          placeholder="Player name"
+                          value={playerForm.name}
+                          onChange={(e) =>
+                            setPlayerForm({
+                              ...playerForm,
+                              name: e.target.value,
+                            })
+                          }
+                          className="bg-[#0f1419]"
+                        />
+                        <Input
+                          type="number"
+                          placeholder="Base price"
+                          value={playerForm.basePrice}
+                          onChange={(e) =>
+                            setPlayerForm({
+                              ...playerForm,
+                              basePrice: Number(e.target.value),
+                            })
+                          }
+                          className="bg-[#0f1419]"
+                        />
+                        <Input
+                          type="number"
+                          placeholder="Age"
+                          value={playerForm.age || ""}
+                          onChange={(e) =>
+                            setPlayerForm({
+                              ...playerForm,
+                              age: Number(e.target.value),
+                            })
+                          }
+                          className="bg-[#0f1419]"
+                        />
+                        <Select
+                          value={playerForm.role}
+                          onValueChange={(v) =>
+                            setPlayerForm({
+                              ...playerForm,
+                              role: v,
+                              batsmanType: needsBattingType(v)
+                                ? playerForm.batsmanType ||
+                                  "Right-Hand Batsman"
+                                : "",
+                              bowlerType: needsBowlingType(v)
+                                ? playerForm.bowlerType === "None"
+                                  ? "Right Arm Medium Fast"
+                                  : playerForm.bowlerType
+                                : "None",
+                            })
+                          }
+                        >
+                          <SelectTrigger className="bg-[#0f1419]">
+                            <SelectValue placeholder="Role" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {PLAYER_ROLES.map((role) => (
+                              <SelectItem key={role} value={role}>
+                                {role}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        {needsBattingType(playerForm.role) && (
+                          <Select
+                            value={playerForm.batsmanType}
+                            onValueChange={(v) =>
+                              setPlayerForm({ ...playerForm, batsmanType: v })
+                            }
+                          >
+                            <SelectTrigger className="bg-[#0f1419]">
+                              <SelectValue placeholder="Batting" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {BATTING_TYPES.map((type) => (
+                                <SelectItem key={type} value={type}>
+                                  {type}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        )}
+                        {needsBowlingType(playerForm.role) && (
+                          <Select
+                            value={playerForm.bowlerType}
+                            onValueChange={(v) =>
+                              setPlayerForm({ ...playerForm, bowlerType: v })
+                            }
+                          >
+                            <SelectTrigger className="bg-[#0f1419]">
+                              <SelectValue placeholder="Bowling" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {BOWLING_TYPES.filter((t) => t !== "None").map(
+                                (type) => (
+                                  <SelectItem key={type} value={type}>
+                                    {type}
+                                  </SelectItem>
+                                )
+                              )}
+                            </SelectContent>
+                          </Select>
+                        )}
+                      </div>
+                      <Button
+                        className="w-full bg-emerald-500 text-black font-bold"
+                        disabled={!playerForm.name.trim() || !playerForm.role}
+                        onClick={() => {
+                          if (!playerForm.name.trim() || !playerForm.role)
+                            return;
+                          if (editPlayerIndex !== null) {
+                            setPlayersData((prev) =>
+                              prev.map((p, i) =>
+                                i === editPlayerIndex ? playerForm : p
+                              )
+                            );
+                          } else {
+                            setPlayersData((prev) => [...prev, playerForm]);
+                          }
+                          setPlayerForm({ ...emptyPlayerForm });
+                          setEditPlayerIndex(null);
+                          setIsPlayerDialogOpen(false);
+                          toast({
+                            title:
+                              editPlayerIndex !== null
+                                ? "Player updated"
+                                : "Player staged",
+                          });
+                        }}
+                      >
+                        {editPlayerIndex !== null
+                          ? "Save Changes"
+                          : "Add to Staging"}
+                      </Button>
+                    </DialogContent>
+                  </Dialog>
+                </div>
               </div>
               <Input
                 type="file"
@@ -807,10 +1305,39 @@ const StaticAuctionTab = () => {
                 onChange={(e) => handleCsvUpload(e, "players")}
                 className="bg-white/10 border-white/20 text-white file:text-white"
               />
-              <ul className="text-sm text-gray-400 max-h-32 overflow-y-auto space-y-1">
+              <p className="text-[11px] text-gray-500">
+                CSV <code className="text-gray-400">photo</code> /{" "}
+                <code className="text-gray-400">logo</code> columns must be
+                public HTTPS URLs (not local files).
+              </p>
+              <ul className="text-sm text-gray-400 max-h-40 overflow-y-auto space-y-1">
                 {playersData.slice(0, CSV_PREVIEW_LIMIT).map((p, i) => (
-                  <li key={`${p.name}-${i}`}>
-                    {i + 1}. {p.name} · {p.role} · {formatINR(p.basePrice)}
+                  <li
+                    key={`${p.name}-${i}`}
+                    className="flex items-center justify-between gap-2"
+                  >
+                    <span className="truncate">
+                      {i + 1}. {p.name} · {p.role} · {formatINR(p.basePrice)}
+                      {p.photo ? " · 📷" : ""}
+                    </span>
+                    <span className="flex items-center gap-2 shrink-0">
+                      <Pencil
+                        className="w-3.5 h-3.5 text-amber-400 cursor-pointer"
+                        onClick={() => {
+                          setPlayerForm({ ...emptyPlayerForm, ...p });
+                          setEditPlayerIndex(i);
+                          setIsPlayerDialogOpen(true);
+                        }}
+                      />
+                      <Trash2
+                        className="w-3.5 h-3.5 text-red-400 cursor-pointer"
+                        onClick={() =>
+                          setPlayersData((prev) =>
+                            prev.filter((_, idx) => idx !== i)
+                          )
+                        }
+                      />
+                    </span>
                   </li>
                 ))}
                 {playersData.length > CSV_PREVIEW_LIMIT && (
@@ -838,9 +1365,7 @@ const StaticAuctionTab = () => {
             className="bg-emerald-500 hover:bg-emerald-600 text-black font-semibold"
           >
             <FileSpreadsheet className="w-4 h-4 mr-2" />
-            {loading
-              ? loadingMessage || "Creating…"
-              : "Start ledger"}
+            {loading ? loadingMessage || "Creating…" : "Start ledger"}
           </Button>
           {loading && playersData.length > 50 && (
             <p className="text-xs text-gray-400">
