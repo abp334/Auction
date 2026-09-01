@@ -1,4 +1,4 @@
-import { memo, useMemo } from "react";
+import { memo, useMemo, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -26,7 +26,6 @@ import {
   Tag,
   UserPlus,
   Trophy,
-  Users,
 } from "lucide-react";
 
 const TEAM_ACCENTS = [
@@ -183,6 +182,83 @@ function PlayerQueueList({
   );
 }
 
+function CommentaryPanel({
+  lines,
+  className = "",
+}: {
+  lines: string[];
+  className?: string;
+}) {
+  return (
+    <div
+      className={`flex flex-col min-h-0 rounded-lg border border-amber-500/20 bg-[#0f1419]/80 overflow-hidden ${className}`}
+    >
+      <h4 className="shrink-0 px-2.5 py-2 text-xs font-bold text-white flex items-center gap-1.5 border-b border-white/5">
+        <Trophy className="w-3.5 h-3.5 text-amber-400" />
+        Live Commentary
+      </h4>
+      <div className="flex-1 min-h-0 overflow-y-auto px-2.5 py-1.5 space-y-1">
+        {lines.map((line, i) => (
+          <p
+            key={`${line}-${i}`}
+            className={`text-[11px] leading-snug border-b border-white/5 pb-1 ${
+              i === 0 ? "text-white" : "text-white/75"
+            }`}
+          >
+            {line}
+          </p>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function PlayerInfoBlock({
+  player,
+  displayAmount,
+  selectedTeamName,
+  playerTags,
+}: {
+  player: Player;
+  displayAmount: number;
+  selectedTeamName?: string;
+  playerTags: ReactNode;
+}) {
+  return (
+    <div className="shrink-0 flex flex-col items-center gap-2.5 text-center px-1">
+      {player.photo ? (
+        <img
+          src={player.photo}
+          alt=""
+          decoding="async"
+          className="w-16 h-16 sm:w-[72px] sm:h-[72px] rounded-full object-cover ring-2 ring-amber-500/60 shrink-0"
+        />
+      ) : (
+        <div className="w-16 h-16 sm:w-[72px] sm:h-[72px] rounded-full bg-gradient-to-br from-slate-600 to-slate-800 flex items-center justify-center text-2xl font-bold text-white ring-2 ring-amber-500/60 shrink-0">
+          {player.name.charAt(0)}
+        </div>
+      )}
+      <div className="min-w-0 w-full">
+        <h3 className="text-lg font-bold text-white truncate">{player.name}</h3>
+        <div className="mt-1 flex justify-center flex-wrap">{playerTags}</div>
+      </div>
+      <div className="w-full max-w-xs rounded-lg border border-amber-500/25 bg-amber-950/20 px-3 py-2">
+        <p className="text-[10px] uppercase tracking-wide text-amber-400/80">
+          Sale amount
+        </p>
+        <p className="text-2xl font-bold text-amber-400 tabular-nums leading-tight">
+          {formatINR(displayAmount)}
+        </p>
+        <p className="text-[10px] text-gray-500 mt-0.5 truncate">
+          {selectedTeamName
+            ? `→ ${selectedTeamName}`
+            : `Base ${formatINR(player.basePrice)}`}
+        </p>
+      </div>
+    </div>
+  );
+}
+
 function StaticBidderBoard(props: Props) {
   const displayAmount =
     props.amountNum > 0
@@ -308,67 +384,25 @@ function StaticBidderBoard(props: Props) {
 
         {props.currentPlayer ? (
           <div className="flex-1 min-h-0 flex flex-col lg:flex-row">
-            {/* Player + amount + commentary */}
-            <div className="shrink-0 lg:w-[240px] xl:w-[280px] lg:border-r border-white/5 p-3 lg:p-3 flex flex-col gap-2 lg:gap-2.5 lg:min-h-0 lg:overflow-hidden border-b lg:border-b-0 border-white/5">
-              <div className="flex items-center gap-3 lg:flex-col lg:gap-2 lg:text-center shrink-0">
-                {props.currentPlayer.photo ? (
-                  <img
-                    src={props.currentPlayer.photo}
-                    alt=""
-                    decoding="async"
-                    className="w-16 h-16 lg:w-[72px] lg:h-[72px] rounded-full object-cover ring-2 ring-amber-500/60 shrink-0"
-                  />
-                ) : (
-                  <div className="w-16 h-16 lg:w-[72px] lg:h-[72px] rounded-full bg-gradient-to-br from-slate-600 to-slate-800 flex items-center justify-center text-2xl font-bold text-white ring-2 ring-amber-500/60 shrink-0">
-                    {props.currentPlayer.name.charAt(0)}
-                  </div>
-                )}
-                <div className="min-w-0 flex-1 lg:flex-none">
-                  <h3 className="text-lg font-bold text-white truncate">
-                    {props.currentPlayer.name}
-                  </h3>
-                  <div className="mt-1 lg:flex lg:justify-center">{playerTags}</div>
-                </div>
-              </div>
-
-              <div className="rounded-lg border border-amber-500/25 bg-amber-950/20 px-3 py-2 text-center shrink-0">
-                <p className="text-[10px] uppercase tracking-wide text-amber-400/80">
-                  Sale amount
-                </p>
-                <p className="text-2xl font-bold text-amber-400 tabular-nums leading-tight">
-                  {formatINR(displayAmount)}
-                </p>
-                <p className="text-[10px] text-gray-500 mt-0.5 truncate">
-                  {props.selectedTeamName
-                    ? `→ ${props.selectedTeamName}`
-                    : `Base ${formatINR(props.currentPlayer.basePrice)}`}
-                </p>
-              </div>
-
-              <div className="hidden lg:flex flex-col flex-1 min-h-0 rounded-lg border border-amber-500/20 bg-[#0f1419]/80 overflow-hidden">
-                <h4 className="shrink-0 px-2.5 py-2 text-xs font-bold text-white flex items-center gap-1.5 border-b border-white/5">
-                  <Trophy className="w-3.5 h-3.5 text-amber-400" />
-                  Live Commentary
-                </h4>
-                <div className="flex-1 min-h-0 overflow-y-auto px-2.5 py-1.5 space-y-1">
-                  {props.commentary.map((line, i) => (
-                    <p
-                      key={`${line}-${i}`}
-                      className={`text-[11px] leading-snug border-b border-white/5 pb-1 ${
-                        i === 0 ? "text-white" : "text-white/75"
-                      }`}
-                    >
-                      {line}
-                    </p>
-                  ))}
-                </div>
-              </div>
+            {/* Left — commentary only (desktop) */}
+            <div className="hidden lg:flex lg:w-[240px] xl:w-[280px] flex-col min-h-0 border-r border-white/5 p-3">
+              <CommentaryPanel
+                lines={props.commentary}
+                className="flex-1 h-full"
+              />
             </div>
 
-            {/* Actions panel */}
-            <div className="flex-1 min-h-0 flex flex-col p-3 lg:p-4 lg:justify-center gap-3">
+            {/* Center — player info + auction controls */}
+            <div className="flex-1 min-h-0 flex flex-col p-3 lg:p-4 gap-3 lg:gap-4 border-b lg:border-b-0 border-white/5 overflow-y-auto">
+              <PlayerInfoBlock
+                player={props.currentPlayer}
+                displayAmount={displayAmount}
+                selectedTeamName={props.selectedTeamName}
+                playerTags={playerTags}
+              />
+
               {!props.completed && (
-                <>
+                <div className="shrink-0 flex flex-col gap-3 lg:mt-1">
                   <div className="grid grid-cols-2 gap-2 items-end">
                     <div className="space-y-1.5 min-w-0">
                       <label className="text-[10px] uppercase tracking-wide text-amber-400/90 font-medium">
@@ -410,7 +444,7 @@ function StaticBidderBoard(props: Props) {
                     </div>
                   </div>
 
-                  <div className="flex flex-wrap gap-1.5">
+                  <div className="flex flex-wrap gap-1.5 justify-center lg:justify-start">
                     {BID_INCREMENTS.map((inc) => (
                       <button
                         key={inc}
@@ -456,41 +490,27 @@ function StaticBidderBoard(props: Props) {
                   </div>
 
                   {props.undoTarget && (
-                    <p className="text-[10px] text-gray-500 truncate hidden lg:block">
+                    <p className="text-[10px] text-gray-500 truncate text-center lg:text-left">
                       Undo last: {props.undoTarget.name}
                       {props.undoTarget.detail
                         ? ` · ${props.undoTarget.detail}`
                         : " · unsold"}
                     </p>
                   )}
-                </>
+                </div>
               )}
 
-              {/* Mobile commentary */}
-              <div className="lg:hidden rounded-lg border border-amber-500/20 bg-[#0f1419]/80 overflow-hidden max-h-28">
-                <h4 className="px-2.5 py-1.5 text-xs font-bold text-white flex items-center gap-1.5 border-b border-white/5">
-                  <Trophy className="w-3.5 h-3.5 text-amber-400" />
-                  Commentary
-                </h4>
-                <div className="overflow-y-auto max-h-20 px-2.5 py-1 space-y-0.5">
-                  {props.commentary.map((line, i) => (
-                    <p
-                      key={`m-${line}-${i}`}
-                      className="text-[11px] text-white/85 border-b border-white/5 pb-0.5"
-                    >
-                      {line}
-                    </p>
-                  ))}
-                </div>
-              </div>
+              {/* Mobile / tablet — commentary below controls */}
+              <CommentaryPanel
+                lines={props.commentary}
+                className="lg:hidden flex-1 min-h-[120px] max-h-40"
+              />
             </div>
 
-            {/* Queue sidebar — desktop */}
+            {/* Right — queue (desktop) */}
             <div className="hidden lg:flex lg:w-[220px] xl:w-[260px] flex-col border-l border-white/5 min-h-0">
               <div className="shrink-0 px-3 py-2 border-b border-white/5">
-                <p className="text-xs font-semibold text-white">
-                  Queue
-                </p>
+                <p className="text-xs font-semibold text-white">Queue</p>
                 <p className="text-[10px] text-gray-500">
                   {props.summary.pending} pending · CSV order
                 </p>
