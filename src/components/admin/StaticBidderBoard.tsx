@@ -46,7 +46,7 @@ const TEAM_BAR = [
   "bg-teal-500",
 ];
 
-const BID_INCREMENTS = [100, 500, 1000, 5000];
+const BID_INCREMENTS = [1, 5, 10, 100, 500, 1000, 5000];
 
 type Player = {
   id: string;
